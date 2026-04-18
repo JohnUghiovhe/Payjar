@@ -291,6 +291,7 @@ export class WalletService {
       );
 
       const metadataPatch = JSON.stringify({
+        ...(transaction.metadata ?? {}),
         source: 'paystack-webhook',
         settledAt: now(),
         paystackReference: reference,
@@ -301,7 +302,7 @@ export class WalletService {
         UPDATE transactions
         SET status = 'completed',
             amount = $2,
-            metadata = metadata || $3::jsonb,
+            metadata = $3::jsonb,
             updated_at = now()
         WHERE id = $1
         RETURNING *
@@ -359,13 +360,16 @@ export class WalletService {
       );
 
       const orderedIds = [input.senderUserId, input.recipientUserId].sort();
-      const walletsResult = await client.query<WalletRow>(
-        'SELECT * FROM wallets WHERE user_id = ANY($1::text[]) ORDER BY user_id FOR UPDATE',
-        [orderedIds],
-      );
+      const firstWalletResult = await client.query<WalletRow>('SELECT * FROM wallets WHERE user_id = $1 FOR UPDATE', [
+        orderedIds[0],
+      ]);
+      const secondWalletResult = await client.query<WalletRow>('SELECT * FROM wallets WHERE user_id = $1 FOR UPDATE', [
+        orderedIds[1],
+      ]);
 
-      const senderWallet = walletsResult.rows.find((row: WalletRow) => row.user_id === input.senderUserId);
-      const recipientWallet = walletsResult.rows.find((row: WalletRow) => row.user_id === input.recipientUserId);
+      const wallets = [...firstWalletResult.rows, ...secondWalletResult.rows];
+      const senderWallet = wallets.find((row: WalletRow) => row.user_id === input.senderUserId);
+      const recipientWallet = wallets.find((row: WalletRow) => row.user_id === input.recipientUserId);
 
       if (!senderWallet) {
         throw new AppError(404, 'Wallet not found.');
