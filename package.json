@@ -4,9 +4,9 @@
   "description": "Backend-driven wallet and transaction management system with double-entry accounting, idempotency, and Paystack webhook verification.",
   "main": "dist/server.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "start": "node dist/server.js",
-    "dev": "tsc -w -p tsconfig.json",
+    "build": "node api.js && tsc -p tsconfig.json",
+    "start": "node api.js && node dist/server.js",
+    "dev": "node api.js && tsc -w -p tsconfig.json",
     "test": "jest --runInBand",
     "test:watch": "jest --watch"
   },
