@@ -17,11 +17,11 @@ const bootstrap = async (): Promise<void> => {
   const port = Number(process.env.PORT ?? 3000);
 
   app.listen(port, () => {
-    process.stdout.write(`PayFlow API listening on port ${port}\n`);
+    process.stdout.write(`PayJar API listening on port ${port}\n`);
   });
 };
 
 bootstrap().catch((error: Error) => {
-  process.stderr.write(`Failed to start PayFlow: ${error.message}\n`);
+  process.stderr.write(`Failed to start PayJar: ${error.message}\n`);
   process.exit(1);
 });

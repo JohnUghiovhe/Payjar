@@ -1,7 +1,7 @@
 export const openApiSpec = {
   openapi: '3.0.3',
   info: {
-    title: 'PayFlow API',
+    title: 'PayJar API',
     version: '1.0.0',
     description:
       'Backend-driven wallet and transaction management API with PostgreSQL persistence, idempotency keys, and Paystack webhook verification.',

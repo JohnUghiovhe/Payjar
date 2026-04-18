@@ -7,7 +7,7 @@ import { createApp } from '../src/app';
 import { initializeDatabase } from '../src/database';
 import { WalletService } from '../src/service';
 
-describe('PayFlow API', () => {
+describe('PayJar API', () => {
   let db: IMemoryDb;
   let app: ReturnType<typeof createApp>;
 

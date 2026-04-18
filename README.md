@@ -1,6 +1,6 @@
-# PayFlow
+# PayJar
 
-PayFlow is a backend-driven wallet and transaction system built around double-entry accounting, idempotent writes, and secure Paystack webhook verification.
+PayJar is a backend-driven wallet and transaction system built around double-entry accounting, idempotent writes, and secure Paystack webhook verification.
 
 ## Major updates
 
@@ -21,7 +21,7 @@ Create an `.env` file with the following values:
 
 ```bash
 PORT=3000
-DATABASE_URL=postgresql://postgres:postgres@localhost:5432/payflow
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/payjar
 PAYSTACK_SECRET_KEY=your_paystack_secret
 PAYSTACK_PUBLIC_KEY=your_paystack_public_key
 ```
