@@ -39,7 +39,7 @@ These are hypotheses, not yet proven customer findings. Conduct interviews and o
 
 Nigeria is a sensible first market for discovery because the founder understands the local context and can recruit early interviewees. Treat mobile-first usage, NGN support, local date/time, local payment habits and variable income as design requirements.
 
-EFInA's 2023 Access to Financial Services in Nigeria survey is a useful baseline for financial access and usage. Its findings should not be treated as proof of demand for PAYJAR. Review the source directly and update the evidence base before investor or public claims: https://efina.org.ng/
+EFInA's 2026 Access to Financial Services in Nigeria survey reports that 64% of Nigerian adults use digital financial services and 38% use a mobile phone or tablet to manage their finances. It also reports mobile money use rising from 12% in 2023 to 38% in 2026. These figures support a mobile-first distribution hypothesis, but they do not prove demand for PAYJAR. Source: https://a2f.ng/a2f-2026-report/
 
 ### Initial customer segments
 
@@ -244,8 +244,14 @@ If the product gets sign-ups but users do not record spending or return, fix the
 
 ## 11. Research sources and caveats
 
-Primary product references:
-- PreSpend: https://useprespend.com/
+Primary product and market references:
+- PreSpend official product site and company page: https://useprespend.com/ and https://useprespend.com/company
+- PreSpend Google Play listing (wallets, daily limits and waiting periods): https://play.google.com/store/apps/details?id=com.useprespend.app
+- EFInA A2F 2026 report: https://a2f.ng/a2f-2026-report/
+- EFInA research archive: https://efina.org.ng/research/
+- Nigeria Data Protection Commission, Nigeria Data Protection Act 2023: https://ndpc.gov.ng/ndp-act-2023/
+- Central Bank of Nigeria payment service provider categories: https://www.cbn.gov.ng/PaymentsSystem/PSPs.html
+- PiggyVest SafeLock: https://www.piggyvest.com/safelock
 - PiggyVest: https://www.piggyvest.com/
 - Cowrywise: https://cowrywise.com/
 - Spendee: https://www.spendee.com/
