@@ -1,15 +1,15 @@
 # PAYJAR Product Requirements Document (PRD)
 
-**Version:** 0.1  
+**Version:** 0.2  
 **Date:** 2 November 2026  
 **Status:** Discovery draft  
 **Owner:** Product / Founder  
 **Initial market:** Nigeria  
-**Product:** PAYJAR personal spending planner and tracker
+**Product:** PAYJAR hybrid personal finance and spending-control platform
 
 ## 1. Product overview
 
-PAYJAR helps people plan how to use their income, understand their spending, and stay within self-defined limits. The first release is a non-custodial application: it records financial information supplied by the user and provides planning guidance. It does not hold funds, execute payments, or prevent transactions at a bank or merchant.
+PAYJAR helps people plan how to use income, understand spending and stay within self-defined limits. The long-term product is hybrid: it combines a planning and tracking experience with optional real-money allocation and payment controls delivered through suitable regulated financial partners. The initial release is non-custodial. It records user-entered information and provides planning guidance; it does not hold funds, execute payments or block external transactions.
 
 ## 2. Problem statement
 
@@ -34,9 +34,9 @@ Make disciplined spending clear, practical and sustainable.
 - Build trust through clear handling of financial data.
 
 ### Non-goals for MVP
-- Holding customer funds or operating a stored-value wallet.
-- Initiating transfers, deposits, withdrawals or bill payments.
-- Blocking a user's bank, card, USSD or cash spending.
+- PAYJAR independently holding customer funds or operating an unlicensed stored-value wallet.
+- PAYJAR directly initiating transfers, deposits, withdrawals or bill payments in the initial release.
+- Claiming that an in-app lock blocks bank, card, USSD or cash spending.
 - Credit, lending, investment advice or savings custody.
 - Open banking or automatic bank transaction import.
 - Business accounting, tax filing or bookkeeping.
@@ -124,8 +124,9 @@ Needs: easy allowance setup, low-friction tracking and reminders.
 ### 7.5 Budgets and jars
 - Create budgets for daily, weekly, monthly, yearly or custom periods.
 - Create category budgets and an overall flexible-spend budget.
-- Create named jars with target amounts and periods.
-- Support planned allocations for bills and savings.
+- Create named virtual jars with target amounts and periods.
+- Support planned allocations for bills, savings and flexible spending.
+- Clearly label virtual jars as planning allocations, not separate bank balances or deposits.
 - Show planned, spent and remaining values.
 - Allow pause, archive and edit.
 - Preserve history when a budget changes. Do not rewrite old transactions.
@@ -148,7 +149,7 @@ Needs: easy allowance setup, low-friction tracking and reminders.
 - Optional reminders to log expenses.
 - Alerts at configurable budget thresholds (default suggestions: 75%, 90%, 100%).
 - Daily summary and weekly review reminders.
-- Optional user-created cooling-off period for a jar or category. This is an in-app reminder/lock only, not a bank restriction.
+- Optional user-created cooling-off period for a virtual jar or category. In Stage 1 this is an in-app friction tool only, not a bank or card restriction.
 - User can snooze or disable notifications.
 - No shame-based language or manipulative streak mechanics.
 
@@ -369,7 +370,7 @@ Assumptions:
 - First market is Nigeria.
 - NGN is the initial currency.
 - Users will accept manual entry in the first release.
-- Product is non-custodial.
+- Initial release is non-custodial.
 - Initial experience is mobile-first web or responsive app.
 
 Open questions:
@@ -381,14 +382,45 @@ Open questions:
 - Is the strongest differentiator the daily calculation, the jars, or the discipline tools?
 - Which notification channel do users prefer?
 
-## 16. Roadmap proposal
+## 16. Product stages and roadmap
 
-**Discovery:** user interviews, competitor walkthrough, prototype tests.
+PAYJAR is a hybrid product by design, but the stages are deliberately separated.
 
-**MVP:** auth, profile, plan, income, expense, categories, commitments, daily guide, dashboard, basic reports.
+### Stage 0: Discovery and validation
+- Interview 15–25 people in the primary segment: salaried early-career adults in Nigeria.
+- Validate the daily safe-to-spend problem and manual expense-entry willingness.
+- Compare PreSpend and at least two budgeting products.
+- Test a clickable mobile-first web prototype.
+- Confirm that users understand the difference between virtual jars and real-money pots.
 
-**Pilot improvements:** reminders, thresholds, custom periods, export, plan history, better recurring items.
+### Stage 1: Non-custodial web MVP
+- Responsive web app, designed mobile-first.
+- Authentication, profile, NGN and Africa/Lagos defaults.
+- Income, expenses, categories, commitments and virtual jars.
+- Monthly planning with daily and weekly views of the same allocation pool.
+- Explainable safe-to-spend calculation.
+- In-app cooling-off tools and threshold alerts.
+- Basic reports and transaction history.
+- No custody, payment initiation, bank linking or claims of external payment blocking.
 
-**Later:** optional bank data import through an approved provider, shared plans, account/card controls through regulated partners, multi-currency and advanced insights.
+### Stage 2: Partner-enabled money movement and pots
+Only after user validation, partner due diligence and legal review:
+- Explore a licensed provider that can offer named accounts, sub-accounts, virtual accounts or equivalent segregated allocations.
+- Let users opt in to move funds into real-money pots where the provider supports the exact use case.
+- Show provider-confirmed balances separately from PAYJAR's manual planning estimates.
+- Support reconciliation, failed transfers, reversals, disputes, fees and consent revocation.
+- Keep PAYJAR's planning experience useful if the partner is unavailable.
 
-Do not commit to payment restrictions until legal, partner, security and operational requirements are known.
+### Stage 3: Genuine spending controls
+Subject to provider capabilities and regulatory approval:
+- Card-linked controls, merchant/category restrictions or configurable spending limits.
+- Scheduled allocations and controlled disbursements.
+- Strong user confirmation, emergency access and recovery paths.
+- Clear disclosures of what is and is not blocked.
+
+### Stage 4: Scale
+- Native mobile apps if usage data supports the investment.
+- Additional currencies and markets after local legal and payment reviews.
+- Shared plans, advanced insights and optional read-only account aggregation.
+
+Do not commit to custody or payment restrictions until the legal role, provider contract, security model and operating responsibilities are clear.
