@@ -1,6 +1,6 @@
 # PAYJAR Go-to-Market Research
 
-**Version:** 0.1  
+**Version:** 0.2  
 **Date:** 2 November 2026  
 **Status:** Discovery draft  
 **Initial market hypothesis:** Nigeria  
@@ -10,13 +10,13 @@
 
 PAYJAR addresses a familiar problem: people know they should manage their money, but often struggle to decide what is safe to spend today, record spending consistently, and stay within a plan.
 
-The opportunity is not simply to build another expense tracker. The stronger product proposition is a spending-control companion that helps users plan what is available, understand what has been spent, and take action before they overspend.
+The opportunity is not simply to build another expense tracker. The stronger product proposition is a hybrid spending companion: first help users plan what is available, understand what has been spent and act before they overspend; later let them allocate real funds into provider-supported pots and use enforceable controls where available.
 
 The idea is viable as a software product, but the core proposition already has close competitors. In particular, PreSpend in Nigeria appears to overlap with spending wallets, daily limits and money-locking features. PAYJAR must therefore validate a distinct reason for users to choose it.
 
 **Recommended initial positioning:** “Know what you can spend. Know what you've spent. Stay within your plan.”
 
-Start as a non-custodial planning and tracking app. Do not hold user money, initiate payments, issue cards or claim to block spending in the MVP. A budget warning is not a payment restriction. Actual restriction requires control at the account, card or payment layer, usually through regulated partners.
+Launch first as a mobile-first responsive web app and non-custodial planning and tracking service for Nigerian users. The hybrid vision is deliberate, but real-money pots, payment initiation, cards and genuine restrictions are later stages delivered only through suitable regulated partners. A budget warning is not a payment restriction.
 
 ## 2. Problem definition
 
@@ -35,9 +35,9 @@ These are hypotheses, not yet proven customer findings. Conduct interviews and o
 
 ## 3. Market and target customer
 
-### Initial geography
+### Initial geography and platform
 
-Nigeria is a sensible first market for discovery because the founder understands the local context and can recruit early interviewees. Treat mobile-first usage, NGN support, local date/time, local payment habits and variable income as design requirements.
+Nigeria is the first market. Build a responsive web application with a mobile-first experience rather than native mobile apps at launch. Use NGN as the initial currency, Africa/Lagos as the default timezone, local date/time and familiar local spending categories. Validate desktop use as a secondary path.
 
 EFInA's 2026 Access to Financial Services in Nigeria survey reports that 64% of Nigerian adults use digital financial services and 38% use a mobile phone or tablet to manage their finances. It also reports mobile money use rising from 12% in 2023 to 38% in 2026. These figures support a mobile-first distribution hypothesis, but they do not prove demand for PAYJAR. Source: https://a2f.ng/a2f-2026-report/
 
@@ -145,6 +145,8 @@ Users should be able to choose:
 Do not silently roll unused daily allowance forward or erase overspending. Make rollover a visible user choice. A suggested default is to allow unused funds to remain in the period's flexible pool, while showing the daily guide recalculated from the remaining balance and days.
 
 ## 7. Go-to-market plan
+
+The initial go-to-market product is a responsive web app, not a custody or payment product. Do not market Stage 1 as a wallet, bank, locked-money service or payment blocker.
 
 ### Phase 0: Problem discovery (2–3 weeks)
 
