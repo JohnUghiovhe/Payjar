@@ -1,16 +1,14 @@
 # PAYJAR Technical Requirements Document (TRD)
 
-**Version:** 0.1  
+**Version:** 0.2  
 **Date:** 2 November 2026  
 **Status:** Proposed technical design  
-**Applies to:** Non-custodial PAYJAR MVP  
+**Applies to:** Stage 1 non-custodial web MVP and staged hybrid architecture  
 **Existing repository:** https://github.com/JohnUghiovhe/Payjar
 
 ## 1. Purpose
 
-This document defines the proposed technical design for the first PAYJAR release: a secure personal spending planner and expense tracker. It is based on the product scope in the PRD and the current repository contents.
-
-The MVP is not a bank, wallet provider, payment processor or payment-blocking service. It stores user-entered financial plans and records. Any later account aggregation, payment initiation, custody or card controls require a separate architecture and legal review.
+This document defines the technical design for PAYJAR's mobile-first responsive web MVP and the architectural boundaries needed for a later partner-enabled hybrid product. Stage 1 stores user-entered plans and records. Later real-money pots and payment controls must be delivered through a suitable regulated provider after legal, partner, security and operational review. PAYJAR must not imply that a virtual jar is a bank account or that an in-app lock blocks external payments.
 
 ## 2. Current repository assessment
 
@@ -102,12 +100,14 @@ Use a **modular monolith** for the MVP. It is easier to build, test and deploy t
 
 ### Deployment units
 
-For the MVP:
+For Stage 1:
 - One stateless API service.
 - One PostgreSQL database.
-- One web frontend deployment.
-- Optional background worker only when scheduled reminders or recurring jobs are introduced.
+- One responsive web frontend deployment.
+- Optional background worker when scheduled reminders or recurring jobs are introduced.
 - Object storage only if receipt uploads are added later.
+
+For the future hybrid stages, add a provider integration module and reconciliation worker only when a real provider has been selected and its capabilities are understood. Keep partner-specific APIs behind an adapter; do not spread provider SDK calls through budget or transaction modules.
 
 Do not add Kafka, RabbitMQ, Redis or microservices without a demonstrated need. A relational database and a modular API are enough for the first cohort.
 
@@ -254,6 +254,17 @@ All records are scoped to an authenticated user. Use UUID primary keys. Include 
 - created_at timestamptz
 - expires_at timestamptz nullable
 - unique(user_id, idempotency_key)
+
+### Future-only entities (do not build for Stage 1)
+
+When a provider is selected, model real-money features separately from virtual budgets:
+- **provider_connections:** provider identifier, external customer reference, consent state, connection status and timestamps. Never store provider secrets or raw credentials here.
+- **money_pots:** internal ID, user ID, provider connection ID, external pot/account reference, currency, status and display metadata.
+- **money_movements:** requested amount, currency, direction, provider reference, idempotency key, state, failure code and timestamps.
+- **provider_events:** provider event ID, event type, signature verification result, received time and processing state.
+- **reconciliation_records:** expected versus provider-confirmed balances/movements, discrepancy state and resolution metadata.
+
+Treat these as a future design sketch, not approved Stage 1 schema. The exact entities depend on the selected provider's product and contract.
 
 Indexes:
 - income_records(user_id, received_at DESC)
@@ -559,13 +570,43 @@ These are proposed targets, not measured performance claims. Establish a baselin
 
 Do not attempt a large rewrite of every existing file in one step. Make small, reviewed changes. The wallet ledger can remain as an isolated experimental module or be removed from the active build if it creates confusion.
 
-## 16. Future integrations: separate design gate
+## 16. Hybrid expansion: partner integration design gate
 
-Potential future capabilities:
-- Read-only bank transaction import through a provider with appropriate access and consent.
+PAYJAR's long-term direction includes real-money pots and genuine spending controls. These must remain outside the Stage 1 money model.
+
+### Provider selection requirements
+Evaluate providers against:
+- Their legal authorisation and permitted activities in Nigeria.
+- Whether they support the exact product: named pots, sub-accounts, virtual accounts, card controls or payment initiation.
+- Settlement and balance semantics, fees, limits and service availability.
+- Webhook signing, event delivery guarantees, idempotency and reconciliation tools.
+- Dispute, reversal, refund and customer-support responsibilities.
+- Data protection, consent, retention and incident obligations.
+- Sandbox quality, documentation and commercial terms.
+
+Do not assume that a provider's ability to create virtual accounts means it can enforce a spending cap or create a true locked pot.
+
+### Integration architecture
+- Create a dedicated provider adapter interface.
+- Keep provider-specific IDs and event formats inside the integration module.
+- Use a durable outbox/inbox pattern for movement requests and provider events when money movement is introduced.
+- Verify webhook signatures and deduplicate provider event IDs.
+- Treat provider-confirmed state as authoritative for actual funds; PAYJAR's local state is a projection.
+- Reconcile movements and balances on a schedule and surface unresolved discrepancies.
+- Model states such as requested, pending, successful, failed, reversed and disputed.
+- Never mark a transfer successful merely because the API request was accepted.
+- Require explicit user consent and provide revocation where applicable.
+- Keep a safe failure mode: budgeting and manual tracking continue if a partner is down.
+
+### Real spending controls
+A genuine restriction requires enforcement at the payment instrument, account or provider layer. An in-app countdown, reminder or hidden button is not a financial restriction. Only expose a control if the provider confirms that it supports it and the legal and operational model has been approved.
+
+Potential future capabilities include:
+- Read-only bank transaction import through an approved provider and explicit consent.
+- Money pots or sub-accounts held/operated by an appropriately authorised provider.
 - Payment initiation through a licensed provider.
-- Card or virtual-account controls through a regulated partner.
-- Direct debit or scheduled savings, if supported by an approved partner.
+- Card or merchant-category controls through a regulated partner.
+- Scheduled allocations where supported by provider APIs.
 - Receipt scanning and transaction categorisation.
 
 Before any integration:
@@ -579,7 +620,17 @@ Before any integration:
 
 Do not describe an in-app jar lock as a real restriction on external payments.
 
-## 17. Technical decisions summary
+## 17. Staged implementation boundaries
+
+**Stage 1 — build now:** responsive web frontend, authenticated API, PostgreSQL domain model, manual income/expense records, virtual budgets/jars, safe-to-spend engine, reminders and basic reports.
+
+**Stage 2 — design after validation:** provider adapter, consent records, real-money pot mapping, movement state machine, signed webhooks, reconciliation and operational support. Implement only after provider and legal review.
+
+**Stage 3 — provider-dependent controls:** card/account limits and merchant/category restrictions only where the partner supports enforceable controls. Include emergency access, user confirmation and recovery processes.
+
+Do not create a generic wallet ledger and assume it can represent provider-held funds. The provider contract determines the actual money model.
+
+## 18. Technical decisions summary
 
 | Decision | Choice | Reason |
 |---|---|---|
@@ -593,7 +644,7 @@ Do not describe an in-app jar lock as a real restriction on external payments.
 | Payments | Out of MVP | Keep product scope and regulatory risk controlled |
 | Bank integrations | Later, opt-in | Requires partner and compliance review |
 
-## 18. References
+## 19. References
 
 - Current repository: https://github.com/JohnUghiovhe/Payjar
 - Node.js releases: https://nodejs.org/en/about/previous-releases
