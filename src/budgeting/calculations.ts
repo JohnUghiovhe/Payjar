@@ -12,6 +12,43 @@ import type {
 export const sumReceivedIncome = (income: readonly IncomeEntry[]): Kobo =>
   sumKobo(income.filter(entry => entry.status === 'received').map(entry => entry.amountKobo));
 
+
+export interface FlexiblePoolInput {
+  startingAvailableKobo: Kobo;
+  receivedIncomeKobo: Kobo;
+  periodExpensesKobo: Kobo;
+  unpaidCommitmentsKobo: Kobo;
+  protectedSavingsKobo: Kobo;
+  otherReservationsKobo: Kobo;
+}
+
+export interface FlexiblePoolResult {
+  flexiblePoolKobo: Kobo;
+  isInShortfall: boolean;
+  shortfallKobo: Kobo;
+}
+
+/**
+ * Calculates the amount available for flexible spending.
+ * Callers must ensure expenses and reservations are not counted twice
+ * (for example, jar spending must not also be included in periodExpenses).
+ */
+export const calculateFlexiblePool = (input: FlexiblePoolInput): FlexiblePoolResult => {
+  const flexiblePoolKobo =
+    input.startingAvailableKobo +
+    input.receivedIncomeKobo -
+    input.periodExpensesKobo -
+    input.unpaidCommitmentsKobo -
+    input.protectedSavingsKobo -
+    input.otherReservationsKobo;
+
+  return {
+    flexiblePoolKobo,
+    isInShortfall: flexiblePoolKobo < 0n,
+    shortfallKobo: flexiblePoolKobo < 0n ? -flexiblePoolKobo : 0n,
+  };
+};
+
 export interface AllocationFundingResult {
   availableFundsKobo: Kobo;
   allocatedKobo: Kobo;
