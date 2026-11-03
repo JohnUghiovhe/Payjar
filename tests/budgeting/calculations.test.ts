@@ -2,6 +2,7 @@ import { describe, expect, test } from '@jest/globals';
 import {
   calculateAllocationFunding,
   calculateDailyGuidance,
+  calculateFlexiblePool,
   calculateFlexibleCapacity,
   calculateJarBalance,
   deriveWeeklyGuidance,
@@ -9,6 +10,36 @@ import {
 } from '../../src/budgeting/calculations';
 
 describe('budget calculations', () => {
+  test('calculates flexible pool from confirmed funds and outstanding reservations', () => {
+    expect(calculateFlexiblePool({
+      startingAvailableKobo: 500000n,
+      receivedIncomeKobo: 100000n,
+      periodExpensesKobo: 75000n,
+      unpaidCommitmentsKobo: 125000n,
+      protectedSavingsKobo: 50000n,
+      otherReservationsKobo: 25000n,
+    })).toEqual({
+      flexiblePoolKobo: 325000n,
+      isInShortfall: false,
+      shortfallKobo: 0n,
+    });
+  });
+
+  test('reports a negative flexible pool as a shortfall, not a negative daily allowance', () => {
+    expect(calculateFlexiblePool({
+      startingAvailableKobo: 10000n,
+      receivedIncomeKobo: 0n,
+      periodExpensesKobo: 15000n,
+      unpaidCommitmentsKobo: 5000n,
+      protectedSavingsKobo: 0n,
+      otherReservationsKobo: 0n,
+    })).toEqual({
+      flexiblePoolKobo: -10000n,
+      isInShortfall: true,
+      shortfallKobo: 10000n,
+    });
+  });
+
   test('counts received income but excludes expected income', () => {
     expect(sumReceivedIncome([
       { amountKobo: 250000n, status: 'received' },
