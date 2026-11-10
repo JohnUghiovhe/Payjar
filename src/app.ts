@@ -3,10 +3,10 @@ import express, { NextFunction, Request, Response } from 'express';
 import swaggerUi from 'swagger-ui-express';
 import { z } from 'zod';
 
-import { WalletService } from './service';
-import { AppError } from './errors';
-import { openApiSpec } from './swagger';
-import { validateRequest } from './validation';
+import { WalletService } from './service.js';
+import { AppError } from './errors.js';
+import { openApiSpec } from './swagger.js';
+import { validateRequest } from './validation.js';
 
 const walletBodySchema = z.object({
   userId: z.string().trim().min(1),

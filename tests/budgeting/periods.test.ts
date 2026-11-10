@@ -1,5 +1,5 @@
 import { describe, expect, test } from '@jest/globals';
-import { addCalendarDays, countCalendarDaysInclusive, getMondayWeekStart } from '../../src/budgeting/periods';
+import { addCalendarDays, countCalendarDaysInclusive, getMondayWeekStart } from '../../src/budgeting/periods.js';
 
 describe('period helpers', () => {
   test('counts both period boundary days', () => {

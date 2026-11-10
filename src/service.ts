@@ -10,8 +10,8 @@ import {
   TransferInput,
   Wallet,
   WebhookEvent,
-} from './domain';
-import { AppError } from './errors';
+} from './domain.js';
+import { AppError } from './errors.js';
 
 const SYSTEM_CLEARING_USER_ID = 'SYSTEM_CLEARING_ACCOUNT';
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from '@jest/globals';
-import { formatKoboAsNaira, parseNairaToKobo, sumKobo } from '../../src/budgeting/money';
+import { formatKoboAsNaira, parseNairaToKobo, sumKobo } from '../../src/budgeting/money.js';
 
 describe('money helpers', () => {
   test('converts decimal naira strings to exact integer kobo', () => {

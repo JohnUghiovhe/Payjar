@@ -1,5 +1,5 @@
 import { describe, expect, test } from '@jest/globals';
-import { applyJarRollover, getDefaultRolloverPolicy } from '../../src/budgeting/rollover';
+import { applyJarRollover, getDefaultRolloverPolicy } from '../../src/budgeting/rollover.js';
 
 describe('jar rollover', () => {
   test('new savings jars carry forward by default', () => {

@@ -1,13 +1,13 @@
-import type { Kobo } from './money';
-import { sumKobo } from './money';
-import { addCalendarDays, countCalendarDaysInclusive, getMondayWeekStart } from './periods';
+import type { Kobo } from './money.ts';
+import { sumKobo } from './money.js';
+import { addCalendarDays, countCalendarDaysInclusive, getMondayWeekStart } from './periods.js';
 import type {
   DailyGuidanceEntry,
   IncomeEntry,
   JarBalanceInput,
   LocalDate,
   WeeklyGuidanceEntry,
-} from './types';
+} from './types.ts';
 
 export const sumReceivedIncome = (income: readonly IncomeEntry[]): Kobo =>
   sumKobo(income.filter(entry => entry.status === 'received').map(entry => entry.amountKobo));

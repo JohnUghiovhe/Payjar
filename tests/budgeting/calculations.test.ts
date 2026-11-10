@@ -7,7 +7,7 @@ import {
   calculateJarBalance,
   deriveWeeklyGuidance,
   sumReceivedIncome,
-} from '../../src/budgeting/calculations';
+} from '../../src/budgeting/calculations.js';
 
 describe('budget calculations', () => {
   test('calculates flexible pool from confirmed funds and outstanding reservations', () => {

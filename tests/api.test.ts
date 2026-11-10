@@ -4,9 +4,9 @@ import { beforeEach, describe, expect, test } from '@jest/globals';
 import request from 'supertest';
 import { IMemoryDb, newDb } from 'pg-mem';
 
-import { createApp } from '../src/app';
-import { initializeDatabase } from '../src/database';
-import { WalletService } from '../src/service';
+import { createApp } from '../src/app.js';
+import { initializeDatabase } from '../src/database.js';
+import { WalletService } from '../src/service.js';
 
 describe('PayJar API', () => {
   let db: IMemoryDb;

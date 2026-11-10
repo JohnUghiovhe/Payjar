@@ -1,4 +1,4 @@
-import type { Kobo } from './money';
+import type { Kobo } from './money.ts';
 
 export type LocalDate = string; // YYYY-MM-DD in the user's planning timezone.
 export type RolloverPolicy = 'carry_forward' | 'release_to_general_pool';

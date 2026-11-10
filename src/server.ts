@@ -1,8 +1,8 @@
 import dotenv from 'dotenv';
 
-import { createApp } from './app';
-import { createDatabasePool, initializeDatabase } from './database';
-import { WalletService } from './service';
+import { createApp } from './app.js';
+import { createDatabasePool, initializeDatabase } from './database.js';
+import { WalletService } from './service.js';
 
 const bootstrap = async (): Promise<void> => {
   dotenv.config();

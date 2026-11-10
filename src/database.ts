@@ -3,7 +3,7 @@ import path from 'path';
 
 import { Pool } from 'pg';
 
-import { AppError } from './errors';
+import { AppError } from './errors.js';
 
 const resolveSchemaPath = (): string => path.join(process.cwd(), 'database', 'schema.sql');
 

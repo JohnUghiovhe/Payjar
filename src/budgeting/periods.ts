@@ -1,4 +1,4 @@
-import type { LocalDate } from './types';
+import type { LocalDate } from './types.ts';
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 

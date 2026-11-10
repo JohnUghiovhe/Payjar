@@ -1,5 +1,5 @@
-import type { JarKind, RolloverPolicy } from './types';
-import type { Kobo } from './money';
+import type { JarKind, RolloverPolicy } from './types.ts';
+import type { Kobo } from './money.ts';
 
 export const getDefaultRolloverPolicy = (jarKind: JarKind): RolloverPolicy =>
   jarKind === 'savings' ? 'carry_forward' : 'release_to_general_pool';
