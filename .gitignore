@@ -1,4 +1,12 @@
-node_modules
+# Ignore node_modules
+node_modules/
+
+# Build output
 dist
+build
+
+# Environment files
 .env
+env.local
+
 .DS_Store
