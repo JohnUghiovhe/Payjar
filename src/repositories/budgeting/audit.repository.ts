@@ -95,7 +95,7 @@ export const listAuditEventsForEntity = async (
     'listAuditEventsForEntity',
     `SELECT * FROM audit_events
      WHERE entity_type = $1 AND entity_id = $2
-     ORDER BY occurred_at DESC`,
+    ORDER BY occurred_at DESC, id DESC`,
     [entityType, entityId],
   );
 
@@ -111,7 +111,7 @@ export const listAuditHistoryForUser = async (
     'listAuditHistoryForUser',
     `SELECT * FROM audit_events
      WHERE user_id = $1
-     ORDER BY occurred_at DESC`,
+    ORDER BY occurred_at DESC, id DESC`,
     [userId],
   );
 
