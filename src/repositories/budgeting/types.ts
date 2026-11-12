@@ -270,6 +270,63 @@ export interface CreateBudgetPeriodInput {
   openingUnallocatedKobo?: Kobo;
 }
 
+export interface CloseBudgetPeriodInput {
+  periodId: string;
+  expectedVersion: number;
+  closedBy: string;
+  closingUnallocatedKobo: Kobo;
+  totalIncomeKobo: Kobo;
+  totalExpenseKobo: Kobo;
+  totalAllocatedKobo: Kobo;
+  totalReleasedKobo: Kobo;
+  totalCarriedKobo: Kobo;
+  totalShortfallKobo: Kobo;
+}
+
+export interface ReopenBudgetPeriodInput {
+  periodId: string;
+  expectedVersion: number;
+}
+
+export interface UpdateDraftBudgetPeriodOpeningInput {
+  periodId: string;
+  openingUnallocatedKobo: Kobo;
+}
+
+export interface CreatePeriodJarSummaryInput {
+  userId: string;
+  budgetId: string;
+  periodId: string;
+  jarId: string;
+  currency: CurrencyCode;
+  revision: number;
+  openingBalanceKobo: Kobo;
+  allocatedKobo: Kobo;
+  spentKobo: Kobo;
+  closingBalanceKobo: Kobo;
+  rolloverPolicy: RolloverPolicy;
+  carriedForwardKobo: Kobo;
+  releasedToGeneralPoolKobo: Kobo;
+  shortfallKobo: Kobo;
+}
+
+export interface CreateRolloverRecordInput {
+  userId: string;
+  budgetId: string;
+  periodId: string;
+  jarId: string | null;
+  scope: RolloverScope;
+  currency: CurrencyCode;
+  revision: number;
+  policy: RolloverPolicy | null;
+  closingBalanceKobo: Kobo;
+  carriedForwardKobo: Kobo;
+  releasedToGeneralPoolKobo: Kobo;
+  shortfallKobo: Kobo;
+  nextPeriodId: string;
+  createdBy: string;
+}
+
 export interface CreateCategoryInput {
   id?: string;
   userId?: string | null;

@@ -1,3 +1,5 @@
+import { randomUUID } from 'crypto';
+
 import type { Kobo } from '../../budgeting/money.js';
 import {
   runQuery,
@@ -7,7 +9,11 @@ import {
   toKobo,
   type Queryable,
 } from './repository.js';
-import type { PeriodJarSummary, RevisionListOptions } from './types.js';
+import type {
+  CreatePeriodJarSummaryInput,
+  PeriodJarSummary,
+  RevisionListOptions,
+} from './types.js';
 
 type PeriodJarSummaryRow = {
   id: string;
@@ -50,6 +56,77 @@ const mapPeriodJarSummary = (row: PeriodJarSummaryRow): PeriodJarSummary => ({
   supersededAt: toIsoTimestampOrNull(row.superseded_at),
   supersededById: row.superseded_by_id,
 });
+
+export const createPeriodJarSummary = async (
+  db: Queryable,
+  input: CreatePeriodJarSummaryInput,
+): Promise<PeriodJarSummary> => {
+  const rows = await runQuery<PeriodJarSummaryRow>(
+    db,
+    'createPeriodJarSummary',
+    `INSERT INTO period_jar_summaries (
+       id, user_id, budget_id, period_id, jar_id, currency, revision,
+       opening_balance_kobo, allocated_kobo, spent_kobo, closing_balance_kobo,
+       rollover_policy, carried_forward_kobo, released_to_general_pool_kobo,
+       shortfall_kobo
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+     RETURNING *`,
+    [
+      randomUUID(),
+      input.userId,
+      input.budgetId,
+      input.periodId,
+      input.jarId,
+      input.currency,
+      input.revision,
+      input.openingBalanceKobo,
+      input.allocatedKobo,
+      input.spentKobo,
+      input.closingBalanceKobo,
+      input.rolloverPolicy,
+      input.carriedForwardKobo,
+      input.releasedToGeneralPoolKobo,
+      input.shortfallKobo,
+    ],
+  );
+
+  const row = rows[0];
+  if (!row) throw new Error('Period jar summary insert returned no row.');
+  return mapPeriodJarSummary(row);
+};
+
+export const supersedeCurrentPeriodJarSummaries = async (
+  db: Queryable,
+  periodId: string,
+): Promise<PeriodJarSummary[]> => {
+  const rows = await runQuery<PeriodJarSummaryRow>(
+    db,
+    'supersedeCurrentPeriodJarSummaries',
+    `UPDATE period_jar_summaries
+     SET superseded_at = now()
+     WHERE period_id = $1 AND superseded_at IS NULL
+     RETURNING *`,
+    [periodId],
+  );
+
+  return rows.map(mapPeriodJarSummary);
+};
+
+export const linkSupersededPeriodJarSummary = async (
+  db: Queryable,
+  summaryId: string,
+  supersededById: string,
+): Promise<void> => {
+  await runQuery(
+    db,
+    'linkSupersededPeriodJarSummary',
+    `UPDATE period_jar_summaries
+     SET superseded_by_id = $2
+     WHERE id = $1 AND superseded_at IS NOT NULL`,
+    [summaryId, supersededById],
+  );
+};
 
 export const listPeriodJarSummaries = async (
   db: Queryable,

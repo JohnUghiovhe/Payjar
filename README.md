@@ -124,6 +124,13 @@ updates require expected versions to reject stale writes. Income, expenses, and
 allocations cannot be changed in closed periods, and archived budgets reject
 financial writes.
 
+Closing a period snapshots net income, expenses, allocations, pool balance, and
+jar balances in one transaction. Per-jar policies determine carry-forward versus
+release; released funds are added to the next prepared draft period, and
+negative balances remain shortfalls. Close/reopen/activate operations are
+audited. Reopening requires a reason; re-closing appends revisions and
+supersedes prior summaries and rollover records rather than overwriting them.
+
 ## Test locally
 
 ```bash

@@ -10,6 +10,7 @@ import {
   createCommitment,
   createIncomeSource,
   createJar,
+  createRolloverRecord,
   createUser,
   getActiveBudgetPeriod,
   getAuditEvent,
@@ -433,6 +434,31 @@ describe('budgeting repositories', () => {
       carriedForwardKobo: 1_000n,
     });
     await expect(listRolloverRecords(pool, period.id)).resolves.toHaveLength(1);
+
+    // pg-mem silently omits rollover rows when these partial indexes are active.
+    await pool.query(
+      `DROP INDEX IF EXISTS rollover_records_jar_revision;
+       DROP INDEX IF EXISTS rollover_records_general_revision;
+       DROP INDEX IF EXISTS rollover_records_current_jar;
+       DROP INDEX IF EXISTS rollover_records_current_general`,
+    );
+    await createRolloverRecord(pool, {
+      userId: USER_1,
+      budgetId: budget.id,
+      periodId: period.id,
+      jarId: jar.id,
+      scope: 'jar',
+      currency: 'NGN',
+      revision: 1,
+      policy: 'carry_forward',
+      closingBalanceKobo: 1_000n,
+      carriedForwardKobo: 1_000n,
+      releasedToGeneralPoolKobo: 0n,
+      shortfallKobo: 0n,
+      nextPeriodId: period.id,
+      createdBy: USER_1,
+    });
+    await expect(listRolloverRecords(pool, period.id)).resolves.toHaveLength(2);
 
     await pool.query(
       `INSERT INTO period_jar_summaries (

@@ -8,10 +8,15 @@ import {
   createCommitment,
   createJar,
   createUser,
+  getBudgetPeriod,
   getUserActiveBudget,
+  listAuditEventsForEntity,
   listExpenses,
   listIncomeEntries,
   listBudgetsForUser,
+  listPeriodJarSummaries,
+  listRolloverRecords,
+  listBudgetPeriods,
   RepositoryError,
 } from '../../src/repositories/budgeting/index.js';
 import { BudgetingService } from '../../src/services/budgeting.service.js';
@@ -34,6 +39,7 @@ const nextIdempotencyKey = (): string =>
 const createTransactionalPool = <PoolType extends object>(
   db: ReturnType<typeof newDb>,
   pool: PoolType,
+  failOnRolloverInsert = false,
 ): PoolType => {
   const raw = pool as unknown as {
     query: (text: string, values?: unknown[]) => Promise<unknown>;
@@ -53,6 +59,9 @@ const createTransactionalPool = <PoolType extends object>(
       return {
         query: async (text: string, values?: unknown[]) => {
           const statement = text.trim().toUpperCase();
+          if (failOnRolloverInsert && statement.startsWith('INSERT INTO ROLLOVER_RECORDS')) {
+            throw new Error('Injected rollover persistence failure.');
+          }
 
           if (statement === 'BEGIN') {
             snapshot = db.backup();
@@ -73,10 +82,19 @@ const createTransactionalPool = <PoolType extends object>(
   return wrapped as unknown as PoolType;
 };
 
-const createTestContext = async () => {
+const createTestContext = async (
+  options: { failOnRolloverInsert?: boolean } = {},
+) => {
   const db = newDb();
   const pool = new (db.adapters.createPg().Pool)();
   await initializeDatabase(pool, { postgresFeatures: false });
+  // pg-mem silently omits rollover rows when these partial indexes are active.
+  await pool.query(
+    `DROP INDEX IF EXISTS rollover_records_jar_revision;
+     DROP INDEX IF EXISTS rollover_records_general_revision;
+     DROP INDEX IF EXISTS rollover_records_current_jar;
+     DROP INDEX IF EXISTS rollover_records_current_general`,
+  );
 
   await createUser(pool, {
     id: USER_1,
@@ -90,7 +108,7 @@ const createTestContext = async () => {
   });
 
   const service = new BudgetingService(
-    createTransactionalPool(db, pool),
+    createTransactionalPool(db, pool, options.failOnRolloverInsert),
     () => new Date('2026-11-10T12:00:00.000Z'),
   );
 
@@ -119,6 +137,281 @@ const sum = (amounts: readonly Kobo[]): Kobo =>
   amounts.reduce((total, amount) => total + amount, 0n);
 
 describe('BudgetingService', () => {
+  test('closes, reopens, revises rollover, and activates the funded next period', async () => {
+    const { pool, service } = await createTestContext();
+    const budget = await createBudgetWithPeriod(service);
+    await createCategory(pool, {
+      id: CATEGORY_1,
+      userId: USER_1,
+      name: 'Food',
+    });
+    await createJar(pool, {
+      id: JAR_STANDARD,
+      budgetId: budget.id,
+      userId: USER_1,
+      name: 'Food',
+      kind: 'standard',
+      rolloverPolicy: 'release_to_general_pool',
+    });
+    await createJar(pool, {
+      id: JAR_SAVINGS,
+      budgetId: budget.id,
+      userId: USER_1,
+      name: 'Emergency',
+      kind: 'savings',
+      rolloverPolicy: 'carry_forward',
+    });
+
+    const active = await service.getBudgetState({
+      userId: USER_1,
+      budgetId: budget.id,
+    });
+    await service.saveJarAllocations({
+      userId: USER_1,
+      budgetId: budget.id,
+      periodId: active.period.id,
+      allocations: [
+        { jarId: JAR_STANDARD, amountKobo: 30_000n, expectedVersion: 0 },
+        { jarId: JAR_SAVINGS, amountKobo: 20_000n, expectedVersion: 0 },
+      ],
+    });
+    await service.recordIncome({
+      userId: USER_1,
+      idempotencyKey: nextIdempotencyKey(),
+      periodId: active.period.id,
+      amountKobo: 10_000n,
+      status: 'received',
+      receivedAt: '2026-11-02T09:00:00.000Z',
+    });
+    await service.recordExpense({
+      userId: USER_1,
+      idempotencyKey: nextIdempotencyKey(),
+      periodId: active.period.id,
+      categoryId: CATEGORY_1,
+      amountKobo: 5_000n,
+      occurredAt: '2026-11-03T09:00:00.000Z',
+    });
+    await service.recordExpense({
+      userId: USER_1,
+      idempotencyKey: nextIdempotencyKey(),
+      periodId: active.period.id,
+      categoryId: CATEGORY_1,
+      jarId: JAR_STANDARD,
+      amountKobo: 10_000n,
+      occurredAt: '2026-11-04T09:00:00.000Z',
+    });
+    await service.recordExpense({
+      userId: USER_1,
+      idempotencyKey: nextIdempotencyKey(),
+      periodId: active.period.id,
+      categoryId: CATEGORY_1,
+      jarId: JAR_SAVINGS,
+      amountKobo: 25_000n,
+      occurredAt: '2026-11-05T09:00:00.000Z',
+    });
+
+    const closeCommand = {
+      userId: USER_1,
+      actorId: USER_1,
+      periodId: active.period.id,
+      expectedVersion: active.period.version,
+      nextPeriod: {
+        startsOn: '2026-12-01',
+        endsOn: '2026-12-31',
+        name: 'December',
+      },
+    };
+    const closed = await service.closeBudgetPeriod(closeCommand);
+
+    expect(closed.period).toMatchObject({
+      status: 'closed',
+      closingUnallocatedKobo: 55_000n,
+      totalIncomeKobo: 10_000n,
+      totalExpenseKobo: 40_000n,
+      totalAllocatedKobo: 50_000n,
+      totalReleasedKobo: 20_000n,
+      totalCarriedKobo: 50_000n,
+      totalShortfallKobo: 5_000n,
+    });
+    expect(closed.nextPeriod).toMatchObject({
+      status: 'draft',
+      sequence: 2,
+      openingUnallocatedKobo: 75_000n,
+    });
+    expect(closed.summaries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          jarId: JAR_STANDARD,
+          closingBalanceKobo: 20_000n,
+          carriedForwardKobo: 0n,
+          releasedToGeneralPoolKobo: 20_000n,
+        }),
+        expect.objectContaining({
+          jarId: JAR_SAVINGS,
+          closingBalanceKobo: -5_000n,
+          carriedForwardKobo: -5_000n,
+          shortfallKobo: 5_000n,
+        }),
+      ]),
+    );
+    expect(closed.rollovers).toHaveLength(3);
+    expect(closed.rollovers.map(item => [item.scope, item.jarId])).toEqual(
+      expect.arrayContaining([
+        ['jar', JAR_STANDARD],
+        ['jar', JAR_SAVINGS],
+        ['general_pool', null],
+      ]),
+    );
+
+    await expect(
+      service.closeBudgetPeriod(closeCommand),
+    ).rejects.toMatchObject({ statusCode: 409 });
+    await expect(
+      listPeriodJarSummaries(pool, active.period.id),
+    ).resolves.toHaveLength(2);
+    await expect(
+      listRolloverRecords(pool, active.period.id),
+    ).resolves.toHaveLength(3);
+
+    const reopened = await service.reopenBudgetPeriod({
+      userId: USER_1,
+      actorId: USER_1,
+      periodId: closed.period.id,
+      expectedVersion: closed.period.version,
+      reason: 'Correct a late expense',
+    });
+    expect(reopened).toMatchObject({
+      status: 'active',
+      closingUnallocatedKobo: null,
+      reopenCount: 1,
+    });
+    const lateExpense = await service.recordExpense({
+      userId: USER_1,
+      idempotencyKey: nextIdempotencyKey(),
+      periodId: reopened.id,
+      categoryId: CATEGORY_1,
+      amountKobo: 2_000n,
+      occurredAt: '2026-11-06T09:00:00.000Z',
+    });
+
+    const revised = await service.closeBudgetPeriod({
+      ...closeCommand,
+      expectedVersion: reopened.version,
+    });
+    expect(revised.period.closingUnallocatedKobo).toBe(53_000n);
+    expect(revised.nextPeriod.openingUnallocatedKobo).toBe(73_000n);
+    expect(revised.summaries.every(summary => summary.revision === 2)).toBe(true);
+    expect(revised.rollovers.every(rollover => rollover.revision === 2)).toBe(true);
+    await expect(
+      listPeriodJarSummaries(pool, active.period.id, {
+        includeSuperseded: true,
+      }),
+    ).resolves.toHaveLength(4);
+    await expect(
+      listRolloverRecords(pool, active.period.id, {
+        includeSuperseded: true,
+      }),
+    ).resolves.toHaveLength(6);
+
+    const audit = await listAuditEventsForEntity(
+      pool,
+      'budget_period',
+      active.period.id,
+    );
+    expect(audit.map(event => event.action)).toEqual(
+      expect.arrayContaining([
+        'budget_period.closed',
+        'budget_period.reopened',
+      ]),
+    );
+    expect(
+      audit.find(event => event.action === 'budget_period.reopened')?.reason,
+    ).toBe('Correct a late expense');
+    await expect(
+      listAuditEventsForEntity(pool, 'expense', lateExpense.id),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ action: 'expense.recorded' }),
+      ]),
+    );
+
+    const activated = await service.activateBudgetPeriod({
+      userId: USER_1,
+      actorId: USER_1,
+      periodId: revised.nextPeriod.id,
+    });
+    expect(activated.status).toBe('active');
+    expect(activated.openingUnallocatedKobo).toBe(73_000n);
+    const nextState = await service.getBudgetState({
+      userId: USER_1,
+      budgetId: budget.id,
+      periodId: activated.id,
+    });
+    expect(
+      nextState.jars.find(item => item.jar.id === JAR_SAVINGS)?.openingBalanceKobo,
+    ).toBe(-5_000n);
+    await expect(
+      service.reopenBudgetPeriod({
+        userId: USER_1,
+        actorId: USER_1,
+        periodId: active.period.id,
+        expectedVersion: revised.period.version,
+        reason: 'Too late to reopen',
+      }),
+    ).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  test('rolls back a close when rollover persistence fails', async () => {
+    const { pool, service } = await createTestContext({
+      failOnRolloverInsert: true,
+    });
+    const budget = await createBudgetWithPeriod(service);
+    const state = await service.getBudgetState({
+      userId: USER_1,
+      budgetId: budget.id,
+    });
+    await createJar(pool, {
+      id: JAR_STANDARD,
+      budgetId: budget.id,
+      userId: USER_1,
+      name: 'Food',
+      kind: 'standard',
+      rolloverPolicy: 'release_to_general_pool',
+    });
+
+    await expect(
+      service.closeBudgetPeriod({
+        userId: USER_1,
+        actorId: USER_1,
+        periodId: state.period.id,
+        expectedVersion: state.period.version,
+        nextPeriod: {
+          startsOn: '2026-12-01',
+          endsOn: '2026-12-31',
+        },
+      }),
+    ).rejects.toBeInstanceOf(RepositoryError);
+
+    await expect(getBudgetPeriod(pool, state.period.id)).resolves.toMatchObject({
+      status: 'active',
+      closingUnallocatedKobo: null,
+    });
+    await expect(listBudgetPeriods(pool, budget.id)).resolves.toHaveLength(1);
+    await expect(
+      listPeriodJarSummaries(pool, state.period.id, {
+        includeSuperseded: true,
+      }),
+    ).resolves.toHaveLength(0);
+    await expect(
+      listRolloverRecords(pool, state.period.id, {
+        includeSuperseded: true,
+      }),
+    ).resolves.toHaveLength(0);
+    await expect(
+      listAuditEventsForEntity(pool, 'budget_period', state.period.id),
+    ).resolves.toHaveLength(0);
+  });
+
   test('creates one active budget per user and allows a new one after archiving', async () => {
     const { pool, service } = await createTestContext();
 

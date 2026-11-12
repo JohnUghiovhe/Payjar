@@ -11,7 +11,13 @@ import {
   toLocalDate,
   type Queryable,
 } from './repository.js';
-import type { BudgetPeriod, CreateBudgetPeriodInput } from './types.js';
+import type {
+  BudgetPeriod,
+  CloseBudgetPeriodInput,
+  CreateBudgetPeriodInput,
+  ReopenBudgetPeriodInput,
+  UpdateDraftBudgetPeriodOpeningInput,
+} from './types.js';
 
 type BudgetPeriodRow = {
   id: string;
@@ -126,6 +132,111 @@ export const getBudgetPeriodForUpdate = async (
     db,
     'getBudgetPeriodForUpdate',
     'SELECT * FROM budget_periods WHERE id = $1 FOR UPDATE',
+    [periodId],
+  );
+
+  return rows[0] ? mapBudgetPeriod(rows[0]) : null;
+};
+
+export const closeBudgetPeriod = async (
+  db: Queryable,
+  input: CloseBudgetPeriodInput,
+): Promise<BudgetPeriod | null> => {
+  const rows = await runQuery<BudgetPeriodRow>(
+    db,
+    'closeBudgetPeriod',
+    `UPDATE budget_periods
+     SET status = 'closed',
+         closing_unallocated_kobo = $3,
+         total_income_kobo = $4,
+         total_expense_kobo = $5,
+         total_allocated_kobo = $6,
+         total_released_kobo = $7,
+         total_carried_kobo = $8,
+         total_shortfall_kobo = $9,
+         closed_at = now(),
+         closed_by = $2,
+         version = version + 1,
+         updated_at = now()
+     WHERE id = $1 AND status = 'active' AND version = $10
+     RETURNING *`,
+    [
+      input.periodId,
+      input.closedBy,
+      input.closingUnallocatedKobo,
+      input.totalIncomeKobo,
+      input.totalExpenseKobo,
+      input.totalAllocatedKobo,
+      input.totalReleasedKobo,
+      input.totalCarriedKobo,
+      input.totalShortfallKobo,
+      input.expectedVersion,
+    ],
+  );
+
+  return rows[0] ? mapBudgetPeriod(rows[0]) : null;
+};
+
+export const reopenBudgetPeriod = async (
+  db: Queryable,
+  input: ReopenBudgetPeriodInput,
+): Promise<BudgetPeriod | null> => {
+  const rows = await runQuery<BudgetPeriodRow>(
+    db,
+    'reopenBudgetPeriod',
+    `UPDATE budget_periods
+     SET status = 'active',
+         closing_unallocated_kobo = NULL,
+         total_income_kobo = NULL,
+         total_expense_kobo = NULL,
+         total_allocated_kobo = NULL,
+         total_released_kobo = NULL,
+         total_carried_kobo = NULL,
+         total_shortfall_kobo = NULL,
+         reopened_at = now(),
+         reopen_count = reopen_count + 1,
+         version = version + 1,
+         updated_at = now()
+     WHERE id = $1 AND status = 'closed' AND version = $2
+     RETURNING *`,
+    [input.periodId, input.expectedVersion],
+  );
+
+  return rows[0] ? mapBudgetPeriod(rows[0]) : null;
+};
+
+export const updateDraftBudgetPeriodOpening = async (
+  db: Queryable,
+  input: UpdateDraftBudgetPeriodOpeningInput,
+): Promise<BudgetPeriod | null> => {
+  const rows = await runQuery<BudgetPeriodRow>(
+    db,
+    'updateDraftBudgetPeriodOpening',
+    `UPDATE budget_periods
+     SET opening_unallocated_kobo = $2,
+         version = version + 1,
+         updated_at = now()
+     WHERE id = $1 AND status = 'draft'
+     RETURNING *`,
+    [input.periodId, input.openingUnallocatedKobo],
+  );
+
+  return rows[0] ? mapBudgetPeriod(rows[0]) : null;
+};
+
+export const activateBudgetPeriod = async (
+  db: Queryable,
+  periodId: string,
+): Promise<BudgetPeriod | null> => {
+  const rows = await runQuery<BudgetPeriodRow>(
+    db,
+    'activateBudgetPeriod',
+    `UPDATE budget_periods
+     SET status = 'active',
+         version = version + 1,
+         updated_at = now()
+     WHERE id = $1 AND status = 'draft'
+     RETURNING *`,
     [periodId],
   );
 

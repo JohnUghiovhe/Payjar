@@ -12,17 +12,23 @@ import {
   type DailyGuidanceResult,
   type FlexiblePoolResult,
 } from '../budgeting/calculations.js';
+import { applyJarRollover } from '../budgeting/rollover.js';
 import type { Kobo } from '../budgeting/money.js';
 import type {
   IncomeEntry as CalculationIncomeEntry,
   LocalDate,
   WeeklyGuidanceEntry,
 } from '../budgeting/types.js';
+import { countCalendarDaysInclusive } from '../budgeting/periods.js';
 import { AppError } from '../errors.js';
 import {
   createBudget as createBudgetRecord,
   createBudgetPeriod as createBudgetPeriodRecord,
+  createPeriodJarSummary,
+  createRolloverRecord,
+  activateBudgetPeriod as activateBudgetPeriodRecord,
   claimIdempotencyKey,
+  closeBudgetPeriod as closeBudgetPeriodRecord,
   completeIdempotencyKey,
   getActiveBudgetPeriod,
   getBudget as getBudgetRecord,
@@ -34,16 +40,26 @@ import {
   getIncomeSource,
   getJar,
   getUserActiveBudget,
+  listBudgetPeriods,
   listCommitments,
   listExpenses,
   listIncomeEntries,
   listJarAllocations,
   listJarCarryForwards,
   listJars,
+  listPeriodJarSummaries,
+  listRolloverRecords,
+  recordAuditEvent,
   recordExpense as recordExpenseRecord,
   recordIncomeEntry,
   RepositoryError,
   saveJarAllocation,
+  supersedeCurrentPeriodJarSummaries,
+  supersedeCurrentRolloverRecords,
+  linkSupersededPeriodJarSummary,
+  linkSupersededRolloverRecord,
+  reopenBudgetPeriod as reopenBudgetPeriodRecord,
+  updateDraftBudgetPeriodOpening,
   updateBudget as updateBudgetRecord,
   type Budget,
   type BudgetPeriod,
@@ -52,6 +68,8 @@ import {
   type IncomeEntry,
   type Jar,
   type JarAllocation,
+  type PeriodJarSummary,
+  type RolloverRecord,
 } from '../repositories/budgeting/index.js';
 
 export type BudgetingPool = Pick<Pool, 'connect' | 'query'>;
@@ -81,6 +99,44 @@ export interface UpdateBudgetCommand {
   periodType?: BudgetPeriodType;
   timezone?: string;
   status?: Budget['status'];
+}
+
+export interface NextBudgetPeriodCommand {
+  startsOn: LocalDate;
+  endsOn: LocalDate;
+  name?: string | null;
+}
+
+export interface CloseBudgetPeriodCommand {
+  userId: string;
+  actorId: string;
+  periodId: string;
+  expectedVersion: number;
+  nextPeriod: NextBudgetPeriodCommand;
+  requestId?: string | null;
+}
+
+export interface ReopenBudgetPeriodCommand {
+  userId: string;
+  actorId: string;
+  periodId: string;
+  expectedVersion: number;
+  reason: string;
+  requestId?: string | null;
+}
+
+export interface ActivateBudgetPeriodCommand {
+  userId: string;
+  actorId: string;
+  periodId: string;
+  requestId?: string | null;
+}
+
+export interface CloseBudgetPeriodResult {
+  period: BudgetPeriod;
+  nextPeriod: BudgetPeriod;
+  summaries: PeriodJarSummary[];
+  rollovers: RolloverRecord[];
 }
 
 export interface GetBudgetStateCommand {
@@ -296,6 +352,23 @@ const requireOptionalTimestamp = (
   }
 };
 
+const sum = (values: readonly Kobo[]): Kobo =>
+  values.reduce((total, value) => total + value, 0n);
+
+const signedExpenseKobo = (expense: Expense): Kobo =>
+  expense.entryType === 'refund' ? -expense.amountKobo : expense.amountKobo;
+
+const auditValue = (value: unknown): unknown => {
+  if (typeof value === 'bigint') return value.toString();
+  if (Array.isArray(value)) return value.map(auditValue);
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, nested]) => [key, auditValue(nested)]),
+    );
+  }
+  return value;
+};
+
 const isUniqueViolation = (error: unknown): boolean => {
   if (!(error instanceof RepositoryError)) return false;
 
@@ -400,9 +473,6 @@ const withTransaction = async <Result>(
     if (!clientReleased) client.release();
   }
 };
-
-const signedExpenseKobo = (expense: Expense): Kobo =>
-  expense.entryType === 'refund' ? -expense.amountKobo : expense.amountKobo;
 
 export class BudgetingService {
   constructor(
@@ -537,6 +607,550 @@ export class BudgetingService {
 
       throw error;
     }
+  }
+
+  async closeBudgetPeriod(
+    command: CloseBudgetPeriodCommand,
+  ): Promise<CloseBudgetPeriodResult> {
+    requireNonEmpty(command.userId, 'userId');
+    requireNonEmpty(command.actorId, 'actorId');
+    requireNonEmpty(command.periodId, 'periodId');
+    requireExpectedVersion(command.expectedVersion);
+    if (command.actorId !== command.userId) {
+      throw new AppError(403, 'Only the budget owner can close this period.');
+    }
+
+    try {
+      countCalendarDaysInclusive(
+        command.nextPeriod.startsOn,
+        command.nextPeriod.endsOn,
+      );
+    } catch (error) {
+      throw new AppError(400, `Invalid next period dates: ${describeError(error)}`);
+    }
+
+    return withTransaction(this.pool, 'closeBudgetPeriod', async client => {
+      const periodReference = await getBudgetPeriod(client, command.periodId);
+      if (periodReference.userId !== command.userId) {
+        throw new AppError(404, 'Budget period not found.');
+      }
+
+      const budget = await getBudgetForUpdate(client, periodReference.budgetId);
+      if (!budget || budget.userId !== command.userId) {
+        throw new AppError(404, 'Budget not found.');
+      }
+      if (budget.status !== 'active') {
+        throw new AppError(409, 'Archived budgets cannot be closed.');
+      }
+
+      const period = await getBudgetPeriodForUpdate(client, command.periodId);
+      if (!period || period.budgetId !== budget.id || period.userId !== command.userId) {
+        throw new AppError(404, 'Budget period not found.');
+      }
+      if (period.status !== 'active') {
+        throw new AppError(409, 'Only an active budget period can be closed.');
+      }
+      if (period.version !== command.expectedVersion) {
+        throw new AppError(
+          409,
+          'Budget period was modified by another request. Reload and try again.',
+        );
+      }
+      if (command.nextPeriod.startsOn <= period.endsOn) {
+        throw new AppError(
+          400,
+          'The next period must start after the period being closed.',
+        );
+      }
+
+      const periods = await listBudgetPeriods(client, budget.id);
+      const previousPeriod = periods.find(
+        item => item.sequence === period.sequence - 1,
+      );
+      if (
+        period.sequence > 1 &&
+        (!previousPeriod ||
+          previousPeriod.status !== 'closed' ||
+          previousPeriod.endsOn >= period.startsOn)
+      ) {
+        throw new AppError(
+          409,
+          'The preceding budget period must be closed and end before this period.',
+        );
+      }
+      const nextSequence = period.sequence + 1;
+      const nextExisting = periods.find(item => item.sequence === nextSequence);
+      const laterPeriods = periods.filter(item => item.sequence > nextSequence);
+      if (laterPeriods.length > 0) {
+        throw new AppError(
+          409,
+          'Later budget periods already exist; close periods in sequence.',
+        );
+      }
+      if (
+        nextExisting &&
+        (nextExisting.status !== 'draft' ||
+          nextExisting.startsOn !== command.nextPeriod.startsOn ||
+          nextExisting.endsOn !== command.nextPeriod.endsOn)
+      ) {
+        throw new AppError(
+          409,
+          'The prepared next period must remain a draft with the same date range.',
+        );
+      }
+      if (
+        periods.some(
+          item =>
+            item.id !== period.id &&
+            item.id !== nextExisting?.id &&
+            command.nextPeriod.startsOn <= item.endsOn &&
+            command.nextPeriod.endsOn >= item.startsOn,
+        )
+      ) {
+        throw new AppError(409, 'The next period overlaps an existing period.');
+      }
+
+      const [
+        jars,
+        allocations,
+        incomes,
+        expenses,
+        carryForwards,
+        priorSummaries,
+        priorRollovers,
+      ] = await Promise.all([
+        listJars(client, budget.id, { includeDeleted: true }),
+        listJarAllocations(client, period.id),
+        listIncomeEntries(client, period.id),
+        listExpenses(client, period.id),
+        listJarCarryForwards(client, budget.id, period.sequence),
+        listPeriodJarSummaries(client, period.id, { includeSuperseded: true }),
+        listRolloverRecords(client, period.id, { includeSuperseded: true }),
+      ]);
+
+      const allocationByJar = new Map(
+        allocations.map(allocation => [allocation.jarId, allocation.amountKobo]),
+      );
+      const carryByJar = new Map(
+        carryForwards.map(item => [item.jarId, item.carriedForwardKobo]),
+      );
+      const spendingByJar = new Map<string, Kobo>();
+      let receivedIncomeKobo = 0n;
+      let netExpenseKobo = 0n;
+      let generalExpenseKobo = 0n;
+
+      for (const income of incomes) {
+        if (income.status === 'received') receivedIncomeKobo += income.amountKobo;
+      }
+      for (const expense of expenses) {
+        const signedAmount = signedExpenseKobo(expense);
+        netExpenseKobo += signedAmount;
+        if (expense.jarId === null) {
+          generalExpenseKobo += signedAmount;
+        } else {
+          spendingByJar.set(
+            expense.jarId,
+            (spendingByJar.get(expense.jarId) ?? 0n) + signedAmount,
+          );
+        }
+      }
+
+      const jarCloseRows = jars.map(jar => {
+        const openingBalanceKobo = carryByJar.get(jar.id) ?? 0n;
+        const allocatedKobo = allocationByJar.get(jar.id) ?? 0n;
+        const spentKobo = spendingByJar.get(jar.id) ?? 0n;
+        const closingBalanceKobo =
+          openingBalanceKobo + allocatedKobo - spentKobo;
+        const rollover = applyJarRollover(
+          closingBalanceKobo,
+          jar.rolloverPolicy,
+        );
+        const previousRevision = priorSummaries
+          .filter(summary => summary.jarId === jar.id)
+          .reduce((latest, summary) => Math.max(latest, summary.revision), 0);
+
+        return {
+          jar,
+          openingBalanceKobo,
+          allocatedKobo,
+          spentKobo,
+          closingBalanceKobo,
+          rollover,
+          revision: previousRevision + 1,
+          shortfallKobo:
+            closingBalanceKobo < 0n ? -closingBalanceKobo : 0n,
+        };
+      });
+
+      const closingUnallocatedKobo =
+        period.openingUnallocatedKobo +
+        receivedIncomeKobo -
+        generalExpenseKobo -
+        sum(allocations.map(allocation => allocation.amountKobo));
+      const totalReleasedKobo = sum(
+        jarCloseRows.map(row => row.rollover.releasedToGeneralPoolKobo),
+      );
+      const totalCarriedKobo =
+        closingUnallocatedKobo +
+        sum(jarCloseRows.map(row => row.rollover.nextJarBalanceKobo));
+      const totalShortfallKobo =
+        (closingUnallocatedKobo < 0n ? -closingUnallocatedKobo : 0n) +
+        sum(jarCloseRows.map(row => row.shortfallKobo));
+      const nextOpeningUnallocatedKobo =
+        closingUnallocatedKobo + totalReleasedKobo;
+
+      let nextPeriod =
+        nextExisting ??
+        (await createBudgetPeriodRecord(client, {
+          budgetId: budget.id,
+          userId: command.userId,
+          sequence: nextSequence,
+          name: command.nextPeriod.name ?? null,
+          startsOn: command.nextPeriod.startsOn,
+          endsOn: command.nextPeriod.endsOn,
+          timezone: period.timezone,
+          currency: period.currency,
+          status: 'draft',
+          openingUnallocatedKobo: nextOpeningUnallocatedKobo,
+        }));
+      if (nextExisting) {
+        const updatedNextPeriod = await updateDraftBudgetPeriodOpening(client, {
+          periodId: nextExisting.id,
+          openingUnallocatedKobo: nextOpeningUnallocatedKobo,
+        });
+        if (!updatedNextPeriod) {
+          throw new AppError(409, 'The prepared next period could not be updated.');
+        }
+        nextPeriod = updatedNextPeriod;
+      }
+
+      const closedPeriod = await closeBudgetPeriodRecord(client, {
+        periodId: period.id,
+        expectedVersion: command.expectedVersion,
+        closedBy: command.actorId,
+        closingUnallocatedKobo,
+        totalIncomeKobo: receivedIncomeKobo,
+        totalExpenseKobo: netExpenseKobo,
+        totalAllocatedKobo: sum(allocations.map(allocation => allocation.amountKobo)),
+        totalReleasedKobo,
+        totalCarriedKobo,
+        totalShortfallKobo,
+      });
+      if (!closedPeriod) {
+        throw new AppError(
+          409,
+          'Budget period was modified by another request. Reload and try again.',
+        );
+      }
+
+      const supersededSummaries = await supersedeCurrentPeriodJarSummaries(
+        client,
+        period.id,
+      );
+      const supersededRollovers = await supersedeCurrentRolloverRecords(
+        client,
+        period.id,
+      );
+      const summaries: PeriodJarSummary[] = [];
+      const rollovers: RolloverRecord[] = [];
+      const summaryByJar = new Map<string, PeriodJarSummary>();
+      const rolloverByScopeAndJar = new Map<string, RolloverRecord>();
+
+      for (const row of jarCloseRows) {
+        const summary = await createPeriodJarSummary(client, {
+          userId: command.userId,
+          budgetId: budget.id,
+          periodId: period.id,
+          jarId: row.jar.id,
+          currency: period.currency,
+          revision: row.revision,
+          openingBalanceKobo: row.openingBalanceKobo,
+          allocatedKobo: row.allocatedKobo,
+          spentKobo: row.spentKobo,
+          closingBalanceKobo: row.closingBalanceKobo,
+          rolloverPolicy: row.jar.rolloverPolicy,
+          carriedForwardKobo: row.rollover.nextJarBalanceKobo,
+          releasedToGeneralPoolKobo:
+            row.rollover.releasedToGeneralPoolKobo,
+          shortfallKobo: row.shortfallKobo,
+        });
+        summaries.push(summary);
+        summaryByJar.set(row.jar.id, summary);
+
+        const revision =
+          priorRollovers
+            .filter(
+              previous =>
+                previous.scope === 'jar' && previous.jarId === row.jar.id,
+            )
+            .reduce((latest, previous) => Math.max(latest, previous.revision), 0) +
+          1;
+        const rollover = await createRolloverRecord(client, {
+          userId: command.userId,
+          budgetId: budget.id,
+          periodId: period.id,
+          jarId: row.jar.id,
+          scope: 'jar',
+          currency: period.currency,
+          revision,
+          policy: row.jar.rolloverPolicy,
+          closingBalanceKobo: row.closingBalanceKobo,
+          carriedForwardKobo: row.rollover.nextJarBalanceKobo,
+          releasedToGeneralPoolKobo:
+            row.rollover.releasedToGeneralPoolKobo,
+          shortfallKobo: row.shortfallKobo,
+          nextPeriodId: nextPeriod.id,
+          createdBy: command.actorId,
+        });
+        rollovers.push(rollover);
+        rolloverByScopeAndJar.set(`jar:${row.jar.id}`, rollover);
+      }
+
+      const generalRolloverRevision =
+        priorRollovers
+          .filter(previous => previous.scope === 'general_pool')
+          .reduce((latest, previous) => Math.max(latest, previous.revision), 0) +
+        1;
+      const generalRollover = await createRolloverRecord(client, {
+        userId: command.userId,
+        budgetId: budget.id,
+        periodId: period.id,
+        jarId: null,
+        scope: 'general_pool',
+        currency: period.currency,
+        revision: generalRolloverRevision,
+        policy: null,
+        closingBalanceKobo: closingUnallocatedKobo,
+        carriedForwardKobo: closingUnallocatedKobo,
+        releasedToGeneralPoolKobo: 0n,
+        shortfallKobo:
+          closingUnallocatedKobo < 0n ? -closingUnallocatedKobo : 0n,
+        nextPeriodId: nextPeriod.id,
+        createdBy: command.actorId,
+      });
+      rollovers.push(generalRollover);
+      rolloverByScopeAndJar.set('general_pool:', generalRollover);
+
+      for (const previous of supersededSummaries) {
+        const current = summaryByJar.get(previous.jarId);
+        if (current) {
+          await linkSupersededPeriodJarSummary(
+            client,
+            previous.id,
+            current.id,
+          );
+        }
+      }
+      for (const previous of supersededRollovers) {
+        const key = `${previous.scope}:${previous.jarId ?? ''}`;
+        const current = rolloverByScopeAndJar.get(key);
+        if (current) {
+          await linkSupersededRolloverRecord(
+            client,
+            previous.id,
+            current.id,
+          );
+        }
+      }
+
+      await recordAuditEvent(client, {
+        userId: command.userId,
+        actorType: 'user',
+        actorId: command.actorId,
+        entityType: 'budget_period',
+        entityId: period.id,
+        action: 'budget_period.closed',
+        beforeState: auditValue(period),
+        afterState: auditValue({
+          period: closedPeriod,
+          nextPeriod,
+          summaries,
+          rollovers,
+        }),
+        requestId: command.requestId,
+      });
+      for (const rollover of rollovers) {
+        await recordAuditEvent(client, {
+          userId: command.userId,
+          actorType: 'user',
+          actorId: command.actorId,
+          entityType: 'rollover_record',
+          entityId: rollover.id,
+          action: 'rollover.applied',
+          afterState: auditValue(rollover),
+          requestId: command.requestId,
+        });
+      }
+
+      return {
+        period: closedPeriod,
+        nextPeriod,
+        summaries,
+        rollovers,
+      };
+    });
+  }
+
+  async reopenBudgetPeriod(
+    command: ReopenBudgetPeriodCommand,
+  ): Promise<BudgetPeriod> {
+    requireNonEmpty(command.userId, 'userId');
+    requireNonEmpty(command.actorId, 'actorId');
+    requireNonEmpty(command.periodId, 'periodId');
+    requireNonEmpty(command.reason, 'reason');
+    requireExpectedVersion(command.expectedVersion);
+    if (command.actorId !== command.userId) {
+      throw new AppError(403, 'Only the budget owner can reopen this period.');
+    }
+
+    return withTransaction(this.pool, 'reopenBudgetPeriod', async client => {
+      const periodReference = await getBudgetPeriod(client, command.periodId);
+      if (periodReference.userId !== command.userId) {
+        throw new AppError(404, 'Budget period not found.');
+      }
+      const budget = await getBudgetForUpdate(client, periodReference.budgetId);
+      if (!budget || budget.userId !== command.userId) {
+        throw new AppError(404, 'Budget not found.');
+      }
+      const period = await getBudgetPeriodForUpdate(client, command.periodId);
+      if (!period || period.budgetId !== budget.id || period.userId !== command.userId) {
+        throw new AppError(404, 'Budget period not found.');
+      }
+      if (period.status !== 'closed') {
+        throw new AppError(409, 'Only a closed budget period can be reopened.');
+      }
+      if (period.version !== command.expectedVersion) {
+        throw new AppError(
+          409,
+          'Budget period was modified by another request. Reload and try again.',
+        );
+      }
+      if (budget.status !== 'active') {
+        throw new AppError(409, 'Archived budgets cannot be reopened.');
+      }
+      if (await getActiveBudgetPeriod(client, budget.id)) {
+        throw new AppError(
+          409,
+          'A budget period must not be active while another period is reopened.',
+        );
+      }
+
+      const periods = await listBudgetPeriods(client, budget.id);
+      const laterClosedOrActive = periods.some(
+        item =>
+          item.sequence > period.sequence &&
+          (item.status === 'active' || item.status === 'closed'),
+      );
+      if (laterClosedOrActive) {
+        throw new AppError(
+          409,
+          'Only the latest closed period can be reopened.',
+        );
+      }
+
+      const reopened = await reopenBudgetPeriodRecord(client, {
+        periodId: period.id,
+        expectedVersion: command.expectedVersion,
+      });
+      if (!reopened) {
+        throw new AppError(
+          409,
+          'Budget period was modified by another request. Reload and try again.',
+        );
+      }
+
+      await recordAuditEvent(client, {
+        userId: command.userId,
+        actorType: 'user',
+        actorId: command.actorId,
+        entityType: 'budget_period',
+        entityId: period.id,
+        action: 'budget_period.reopened',
+        beforeState: auditValue(period),
+        afterState: auditValue(reopened),
+        reason: command.reason,
+        requestId: command.requestId,
+      });
+      return reopened;
+    });
+  }
+
+  async activateBudgetPeriod(
+    command: ActivateBudgetPeriodCommand,
+  ): Promise<BudgetPeriod> {
+    requireNonEmpty(command.userId, 'userId');
+    requireNonEmpty(command.actorId, 'actorId');
+    requireNonEmpty(command.periodId, 'periodId');
+    if (command.actorId !== command.userId) {
+      throw new AppError(403, 'Only the budget owner can activate this period.');
+    }
+
+    return withTransaction(this.pool, 'activateBudgetPeriod', async client => {
+      const periodReference = await getBudgetPeriod(client, command.periodId);
+      if (periodReference.userId !== command.userId) {
+        throw new AppError(404, 'Budget period not found.');
+      }
+      const budget = await getBudgetForUpdate(client, periodReference.budgetId);
+      if (!budget || budget.userId !== command.userId) {
+        throw new AppError(404, 'Budget not found.');
+      }
+      const period = await getBudgetPeriodForUpdate(client, command.periodId);
+      if (!period || period.budgetId !== budget.id || period.userId !== command.userId) {
+        throw new AppError(404, 'Budget period not found.');
+      }
+      if (budget.status !== 'active') {
+        throw new AppError(409, 'Archived budgets cannot be activated.');
+      }
+      if (period.status !== 'draft') {
+        throw new AppError(409, 'Only a draft budget period can be activated.');
+      }
+      if (await getActiveBudgetPeriod(client, budget.id)) {
+        throw new AppError(409, 'Another budget period is already active.');
+      }
+
+      const periods = await listBudgetPeriods(client, budget.id);
+      const previous = periods.find(
+        item => item.sequence === period.sequence - 1,
+      );
+      if (
+        period.sequence > 1 &&
+        (!previous ||
+          previous.status !== 'closed' ||
+          previous.endsOn >= period.startsOn)
+      ) {
+        throw new AppError(
+          409,
+          'The preceding budget period must be closed and end before activation.',
+        );
+      }
+      if (
+        periods.some(
+          item =>
+            item.id !== period.id &&
+            period.startsOn <= item.endsOn &&
+            period.endsOn >= item.startsOn,
+        )
+      ) {
+        throw new AppError(409, 'The budget period overlaps an existing period.');
+      }
+
+      const activated = await activateBudgetPeriodRecord(client, period.id);
+      if (!activated) {
+        throw new AppError(409, 'Budget period could not be activated.');
+      }
+      await recordAuditEvent(client, {
+        userId: command.userId,
+        actorType: 'user',
+        actorId: command.actorId,
+        entityType: 'budget_period',
+        entityId: period.id,
+        action: 'budget_period.activated',
+        beforeState: auditValue(period),
+        afterState: auditValue(activated),
+        requestId: command.requestId,
+      });
+      return activated;
+    });
   }
 
   /**
@@ -782,10 +1396,12 @@ export class BudgetingService {
           throw new AppError(404, 'Budget period not found.');
         }
 
-        if (period.status === 'closed') {
+        if (period.status !== 'active') {
           throw new AppError(
             409,
-            'Closed budget periods must be reopened before allocations can change.',
+            period.status === 'closed'
+              ? 'Closed budget periods must be reopened before allocations can change.'
+              : 'Draft budget periods must be activated before allocations can change.',
           );
         }
 
@@ -854,17 +1470,29 @@ export class BudgetingService {
         );
 
         for (const allocation of ordered) {
-          saved.push(
-            await saveJarAllocation(client, {
+          const current = existingByJar.get(allocation.jarId) ?? null;
+          const savedAllocation = await saveJarAllocation(client, {
+            userId: command.userId,
+            budgetId: budget.id,
+            periodId: period.id,
+            jarId: allocation.jarId,
+            amountKobo: allocation.amountKobo,
+            currency: period.currency,
+            note: allocation.note ?? null,
+          });
+          saved.push(savedAllocation);
+          if (period.reopenCount > 0) {
+            await recordAuditEvent(client, {
               userId: command.userId,
-              budgetId: budget.id,
-              periodId: period.id,
-              jarId: allocation.jarId,
-              amountKobo: allocation.amountKobo,
-              currency: period.currency,
-              note: allocation.note ?? null,
-            }),
-          );
+              actorType: 'user',
+              actorId: command.userId,
+              entityType: 'jar_allocation',
+              entityId: savedAllocation.id,
+              action: current ? 'jar_allocation.updated' : 'jar_allocation.created',
+              beforeState: auditValue(current),
+              afterState: auditValue(savedAllocation),
+            });
+          }
         }
 
         return { allocations: saved, funding };
@@ -921,10 +1549,12 @@ export class BudgetingService {
         throw new AppError(404, 'Budget period not found.');
       }
 
-      if (period.status === 'closed') {
+      if (period.status !== 'active') {
         throw new AppError(
           409,
-          'Closed budget periods must be reopened before income can be recorded.',
+          period.status === 'closed'
+            ? 'Closed budget periods must be reopened before income can be recorded.'
+            : 'Draft budget periods must be activated before income can be recorded.',
         );
       }
 
@@ -947,6 +1577,18 @@ export class BudgetingService {
         receivedAt: command.receivedAt ?? null,
         note: command.note ?? null,
       });
+
+      if (period.reopenCount > 0) {
+        await recordAuditEvent(client, {
+          userId: command.userId,
+          actorType: 'user',
+          actorId: command.userId,
+          entityType: 'income_entry',
+          entityId: entry.id,
+          action: 'income_entry.recorded',
+          afterState: auditValue(entry),
+        });
+      }
 
       await completeIdempotencyKey(client, {
         scope,
@@ -1018,10 +1660,12 @@ export class BudgetingService {
         throw new AppError(404, 'Budget period not found.');
       }
 
-      if (period.status === 'closed') {
+      if (period.status !== 'active') {
         throw new AppError(
           409,
-          'Closed budget periods must be reopened before expenses can be recorded.',
+          period.status === 'closed'
+            ? 'Closed budget periods must be reopened before expenses can be recorded.'
+            : 'Draft budget periods must be activated before expenses can be recorded.',
         );
       }
 
@@ -1065,6 +1709,18 @@ export class BudgetingService {
         occurredAt: command.occurredAt,
         source: command.source ?? 'manual',
       });
+
+      if (period.reopenCount > 0) {
+        await recordAuditEvent(client, {
+          userId: command.userId,
+          actorType: 'user',
+          actorId: command.userId,
+          entityType: 'expense',
+          entityId: expense.id,
+          action: 'expense.recorded',
+          afterState: auditValue(expense),
+        });
+      }
 
       await completeIdempotencyKey(client, {
         scope,

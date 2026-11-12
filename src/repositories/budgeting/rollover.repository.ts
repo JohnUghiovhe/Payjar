@@ -1,3 +1,5 @@
+import { randomUUID } from 'crypto';
+
 import {
   requireRow,
   runQuery,
@@ -7,7 +9,11 @@ import {
   toKobo,
   type Queryable,
 } from './repository.js';
-import type { RevisionListOptions, RolloverRecord } from './types.js';
+import type {
+  CreateRolloverRecordInput,
+  RevisionListOptions,
+  RolloverRecord,
+} from './types.js';
 
 type RolloverRecordRow = {
   id: string;
@@ -50,6 +56,76 @@ const mapRolloverRecord = (row: RolloverRecordRow): RolloverRecord => ({
   createdAt: toIsoTimestamp(row.created_at),
   createdBy: row.created_by,
 });
+
+export const createRolloverRecord = async (
+  db: Queryable,
+  input: CreateRolloverRecordInput,
+): Promise<RolloverRecord> => {
+  const rows = await runQuery<RolloverRecordRow>(
+    db,
+    'createRolloverRecord',
+    `INSERT INTO rollover_records (
+       id, user_id, budget_id, period_id, jar_id, scope, currency, revision,
+       policy, closing_balance_kobo, carried_forward_kobo,
+       released_to_general_pool_kobo, shortfall_kobo, next_period_id, created_by
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+     RETURNING *`,
+    [
+      randomUUID(),
+      input.userId,
+      input.budgetId,
+      input.periodId,
+      input.jarId,
+      input.scope,
+      input.currency,
+      input.revision,
+      input.policy,
+      input.closingBalanceKobo,
+      input.carriedForwardKobo,
+      input.releasedToGeneralPoolKobo,
+      input.shortfallKobo,
+      input.nextPeriodId,
+      input.createdBy,
+    ],
+  );
+
+  const row = rows[0];
+  if (!row) throw new Error('Rollover record insert returned no row.');
+  return mapRolloverRecord(row);
+};
+
+export const supersedeCurrentRolloverRecords = async (
+  db: Queryable,
+  periodId: string,
+): Promise<RolloverRecord[]> => {
+  const rows = await runQuery<RolloverRecordRow>(
+    db,
+    'supersedeCurrentRolloverRecords',
+    `UPDATE rollover_records
+     SET superseded_at = now()
+     WHERE period_id = $1 AND superseded_at IS NULL
+     RETURNING *`,
+    [periodId],
+  );
+
+  return rows.map(mapRolloverRecord);
+};
+
+export const linkSupersededRolloverRecord = async (
+  db: Queryable,
+  rolloverId: string,
+  supersededById: string,
+): Promise<void> => {
+  await runQuery(
+    db,
+    'linkSupersededRolloverRecord',
+    `UPDATE rollover_records
+     SET superseded_by_id = $2
+     WHERE id = $1 AND superseded_at IS NOT NULL`,
+    [rolloverId, supersededById],
+  );
+};
 
 export const getRolloverRecord = async (
   db: Queryable,
