@@ -11,6 +11,7 @@ import {
   getBudgetPeriod,
   getUserActiveBudget,
   listAuditEventsForEntity,
+  listAuditHistoryForUser,
   listExpenses,
   listIncomeEntries,
   listBudgetsForUser,
@@ -40,6 +41,7 @@ const createTransactionalPool = <PoolType extends object>(
   db: ReturnType<typeof newDb>,
   pool: PoolType,
   failOnRolloverInsert = false,
+  failOnAuditInsert = false,
 ): PoolType => {
   const raw = pool as unknown as {
     query: (text: string, values?: unknown[]) => Promise<unknown>;
@@ -62,6 +64,9 @@ const createTransactionalPool = <PoolType extends object>(
           if (failOnRolloverInsert && statement.startsWith('INSERT INTO ROLLOVER_RECORDS')) {
             throw new Error('Injected rollover persistence failure.');
           }
+          if (failOnAuditInsert && statement.startsWith('INSERT INTO AUDIT_EVENTS')) {
+            throw new Error('Injected audit persistence failure.');
+          }
 
           if (statement === 'BEGIN') {
             snapshot = db.backup();
@@ -83,7 +88,10 @@ const createTransactionalPool = <PoolType extends object>(
 };
 
 const createTestContext = async (
-  options: { failOnRolloverInsert?: boolean } = {},
+  options: {
+    failOnRolloverInsert?: boolean;
+    failOnAuditInsert?: boolean;
+  } = {},
 ) => {
   const db = newDb();
   const pool = new (db.adapters.createPg().Pool)();
@@ -108,7 +116,12 @@ const createTestContext = async (
   });
 
   const service = new BudgetingService(
-    createTransactionalPool(db, pool, options.failOnRolloverInsert),
+    createTransactionalPool(
+      db,
+      pool,
+      options.failOnRolloverInsert,
+      options.failOnAuditInsert,
+    ),
     () => new Date('2026-11-10T12:00:00.000Z'),
   );
 
@@ -327,6 +340,32 @@ describe('BudgetingService', () => {
     expect(
       audit.find(event => event.action === 'budget_period.reopened')?.reason,
     ).toBe('Correct a late expense');
+    const previousRollover = closed.rollovers[0]!;
+    const rolloverReplacement = revised.rollovers.find(
+      rollover =>
+        rollover.scope === previousRollover.scope &&
+        rollover.jarId === previousRollover.jarId,
+    );
+    const rolloverAudit = await listAuditEventsForEntity(
+      pool,
+      'rollover_record',
+      previousRollover.id,
+    );
+    expect(rolloverAudit).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: 'rollover.applied',
+          afterState: expect.objectContaining({ id: previousRollover.id }),
+        }),
+        expect.objectContaining({
+          action: 'rollover.superseded',
+          beforeState: expect.objectContaining({ id: previousRollover.id }),
+          afterState: expect.objectContaining({
+            id: rolloverReplacement?.id,
+          }),
+        }),
+      ]),
+    );
     await expect(
       listAuditEventsForEntity(pool, 'expense', lateExpense.id),
     ).resolves.toEqual(
@@ -342,6 +381,13 @@ describe('BudgetingService', () => {
     });
     expect(activated.status).toBe('active');
     expect(activated.openingUnallocatedKobo).toBe(73_000n);
+    await expect(
+      listAuditEventsForEntity(pool, 'budget_period', activated.id),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ action: 'budget_period.activated' }),
+      ]),
+    );
     const nextState = await service.getBudgetState({
       userId: USER_1,
       budgetId: budget.id,
@@ -409,7 +455,9 @@ describe('BudgetingService', () => {
     ).resolves.toHaveLength(0);
     await expect(
       listAuditEventsForEntity(pool, 'budget_period', state.period.id),
-    ).resolves.toHaveLength(0);
+    ).resolves.toEqual([
+      expect.objectContaining({ action: 'budget_period.created' }),
+    ]);
   });
 
   test('creates one active budget per user and allows a new one after archiving', async () => {
@@ -439,6 +487,17 @@ describe('BudgetingService', () => {
     });
     expect(archived.status).toBe('archived');
     expect(archived.version).toBe(2);
+    await expect(
+      listAuditEventsForEntity(pool, 'budget', budget.id),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: 'budget.archived',
+          beforeState: { status: 'active' },
+          afterState: { status: 'archived' },
+        }),
+      ]),
+    );
 
     const replacement = await createBudgetWithPeriod(service);
     expect(replacement.id).not.toBe(budget.id);
@@ -447,11 +506,198 @@ describe('BudgetingService', () => {
     });
   });
 
+  test('audits budget, allocation, income, expense, and refund changes with snapshots', async () => {
+    const { pool, service } = await createTestContext();
+    const budget = await service.createBudget({
+      userId: USER_1,
+      idempotencyKey: nextIdempotencyKey(),
+      requestId: 'budget-create-request',
+      name: 'Monthly',
+      periodType: 'monthly',
+      timezone: 'Africa/Lagos',
+      initialPeriod: {
+        startsOn: '2026-11-01',
+        endsOn: '2026-11-30',
+        openingUnallocatedKobo: 100_000n,
+      },
+    });
+    const period = (await listBudgetPeriods(pool, budget.id))[0];
+    expect(period).toBeDefined();
+
+    await service.updateBudget({
+      userId: USER_1,
+      budgetId: budget.id,
+      expectedVersion: budget.version,
+      requestId: 'budget-update-request',
+      name: 'Updated monthly',
+    });
+
+    await createCategory(pool, {
+      id: CATEGORY_1,
+      userId: USER_1,
+      name: 'Food',
+    });
+    await createJar(pool, {
+      id: JAR_STANDARD,
+      budgetId: budget.id,
+      userId: USER_1,
+      name: 'Food',
+      kind: 'standard',
+      rolloverPolicy: 'release_to_general_pool',
+    });
+
+    const allocation = await service.saveJarAllocations({
+      userId: USER_1,
+      budgetId: budget.id,
+      periodId: period!.id,
+      requestId: 'allocation-create-request',
+      allocations: [
+        { jarId: JAR_STANDARD, amountKobo: 10_000n, expectedVersion: 0 },
+      ],
+    });
+    const updatedAllocation = await service.saveJarAllocations({
+      userId: USER_1,
+      budgetId: budget.id,
+      periodId: period!.id,
+      requestId: 'allocation-update-request',
+      allocations: [
+        { jarId: JAR_STANDARD, amountKobo: 12_000n, expectedVersion: 1 },
+      ],
+    });
+    const income = await service.recordIncome({
+      userId: USER_1,
+      idempotencyKey: nextIdempotencyKey(),
+      periodId: period!.id,
+      requestId: 'income-request',
+      amountKobo: 5_000n,
+      status: 'received',
+      receivedAt: '2026-11-02T09:00:00.000Z',
+    });
+    const expense = await service.recordExpense({
+      userId: USER_1,
+      idempotencyKey: nextIdempotencyKey(),
+      periodId: period!.id,
+      categoryId: CATEGORY_1,
+      requestId: 'expense-request',
+      amountKobo: 2_000n,
+      occurredAt: '2026-11-03T09:00:00.000Z',
+    });
+    const refund = await service.recordExpense({
+      userId: USER_1,
+      idempotencyKey: nextIdempotencyKey(),
+      periodId: period!.id,
+      categoryId: CATEGORY_1,
+      entryType: 'refund',
+      adjustsExpenseId: expense.id,
+      requestId: 'refund-request',
+      reason: 'Merchant refund',
+      amountKobo: 500n,
+      occurredAt: '2026-11-04T09:00:00.000Z',
+    });
+
+    await expect(
+      listAuditEventsForEntity(pool, 'budget', budget.id),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: 'budget.created',
+          requestId: 'budget-create-request',
+          afterState: expect.objectContaining({ name: 'Monthly' }),
+        }),
+        expect.objectContaining({
+          action: 'budget.updated',
+          requestId: 'budget-update-request',
+          beforeState: { name: 'Monthly' },
+          afterState: { name: 'Updated monthly' },
+        }),
+      ]),
+    );
+    await expect(
+      listAuditEventsForEntity(pool, 'budget_period', period!.id),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ action: 'budget_period.created' }),
+      ]),
+    );
+    await expect(
+      listAuditEventsForEntity(
+        pool,
+        'jar_allocation',
+        allocation.allocations[0]!.id,
+      ),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: 'jar_allocation.created',
+          requestId: 'allocation-create-request',
+          beforeState: null,
+        }),
+        expect.objectContaining({
+          action: 'jar_allocation.updated',
+          requestId: 'allocation-update-request',
+          beforeState: expect.objectContaining({ amountKobo: '10000' }),
+          afterState: expect.objectContaining({ amountKobo: '12000' }),
+        }),
+      ]),
+    );
+    await expect(
+      listAuditEventsForEntity(pool, 'income_entry', income.id),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: 'income_entry.recorded',
+          requestId: 'income-request',
+          afterState: expect.objectContaining({ amountKobo: '5000' }),
+        }),
+      ]),
+    );
+    await expect(
+      listAuditEventsForEntity(pool, 'expense', expense.id),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: 'expense.recorded',
+          requestId: 'expense-request',
+          afterState: expect.objectContaining({ amountKobo: '2000' }),
+        }),
+      ]),
+    );
+    await expect(
+      listAuditEventsForEntity(pool, 'expense', refund.id),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: 'expense.refunded',
+          requestId: 'refund-request',
+          reason: 'Merchant refund',
+          afterState: expect.objectContaining({
+            adjustsExpenseId: expense.id,
+            amountKobo: '500',
+          }),
+        }),
+      ]),
+    );
+    expect(updatedAllocation.allocations[0]?.amountKobo).toBe(12_000n);
+  });
+
+  test('rolls back a financial record when its required audit write fails', async () => {
+    const { pool, service } = await createTestContext({
+      failOnAuditInsert: true,
+    });
+
+    await expect(createBudgetWithPeriod(service)).rejects.toBeInstanceOf(
+      RepositoryError,
+    );
+    await expect(listBudgetsForUser(pool, USER_1)).resolves.toHaveLength(0);
+    await expect(listAuditHistoryForUser(pool, USER_1)).resolves.toHaveLength(0);
+  });
+
   test('replays idempotent budget creates and rejects key reuse with another payload', async () => {
     const { pool, service } = await createTestContext();
     const command = {
       userId: USER_1,
       idempotencyKey: 'budget-create-retry',
+      requestId: 'original-request',
       name: 'Monthly',
       periodType: 'monthly' as const,
       timezone: 'Africa/Lagos',
@@ -463,7 +709,10 @@ describe('BudgetingService', () => {
     };
 
     const created = await service.createBudget(command);
-    const replayed = await service.createBudget(command);
+    const replayed = await service.createBudget({
+      ...command,
+      requestId: 'retry-request',
+    });
 
     expect(replayed.id).toBe(created.id);
     await expect(
@@ -645,6 +894,7 @@ describe('BudgetingService', () => {
       categoryId: CATEGORY_1,
       entryType: 'refund',
       adjustsExpenseId: generalExpense.id,
+      reason: 'Correct the original purchase amount.',
       amountKobo: 2_000n,
       occurredAt: '2026-11-05T10:00:00.000Z',
     });

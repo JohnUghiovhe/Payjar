@@ -122,7 +122,11 @@ calculation functions. Multi-record writes run in transactions; budget, income,
 and expense creates use user-scoped idempotency keys, and budget/allocation
 updates require expected versions to reject stale writes. Income, expenses, and
 allocations cannot be changed in closed periods, and archived budgets reject
-financial writes.
+financial writes. Budget creation/configuration, period lifecycle, allocations,
+income entries, expenses, refunds, and rollover revisions write audit records
+in the same transaction as the financial change. Audit events include the
+affected record, before/after state where applicable, actor, optional reason,
+and optional request ID.
 
 Closing a period snapshots net income, expenses, allocations, pool balance, and
 jar balances in one transaction. Per-jar policies determine carry-forward versus
@@ -130,6 +134,9 @@ release; released funds are added to the next prepared draft period, and
 negative balances remain shortfalls. Close/reopen/activate operations are
 audited. Reopening requires a reason; re-closing appends revisions and
 supersedes prior summaries and rollover records rather than overwriting them.
+Audit history is append-only: PostgreSQL rejects updates, deletes, and
+truncation of audit events. The repository exposes only insert and read
+operations for audit records.
 
 ## Test locally
 
