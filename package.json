@@ -7,8 +7,8 @@
     "build": "node init && tsc -p tsconfig.json",
     "start": "node init && node dist/server.js",
     "dev": "node init && tsc -w -p tsconfig.json",
-    "test": "jest --runInBand",
-    "test:watch": "jest --watch"
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand",
+    "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js --watch"
   },
   "keywords": [
     "wallet",
