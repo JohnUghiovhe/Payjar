@@ -8,6 +8,7 @@ This folder contains the initial product and technical direction for PAYJAR.
 | [Product requirements (PRD)](./PRD.md) | Users, problems, product scope, requirements and success measures |
 | [Technical requirements (TRD)](./TRD.md) | Architecture, data model, APIs, security, delivery and technical decisions |
 | [Database domain model](./DATABASE-DOMAIN-MODEL.md) | Final budgeting entities, relationships, constraints, money storage and ERD (DB-01) |
+| [Database migrations](./DATABASE-MIGRATIONS.md) | Migration layout, tracking, execution, failed-migration handling and test-environment behaviour (DB-03) |
 
 ## Document status
 

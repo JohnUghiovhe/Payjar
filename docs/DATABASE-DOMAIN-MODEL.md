@@ -26,7 +26,7 @@ This ticket does **not** create or change database tables. The target schema is 
 
 ## 2. Sources reviewed
 
-- `database/schema.sql` — current wallet, transaction, ledger and idempotency schema.
+- `database/migrations/001_initial_schema.sql` — initial wallet, transaction, ledger, idempotency and budgeting schema.
 - `src/budgeting/calculations.ts` — flexible pool, allocation funding, jar balance and daily guidance.
 - `src/budgeting/rollover.ts` — per-jar rollover behaviour.
 - `src/budgeting/money.ts` — kobo representation and parsing rules.
@@ -89,7 +89,7 @@ These resolve section 7 of the implementation guide ("Important Technical Decisi
 | D4 | Closed-period edits | A closed period must be explicitly reopened. Reopening is audited. Re-closing recomputes summaries and creates superseding rollover revisions. Later periods are corrected through compensating adjustments, never by silently rewriting prior rollover history. |
 | D5 | Concurrency | Mutable aggregates carry an integer `version` for optimistic checks. Period close and rollover lock the period row with `SELECT … FOR UPDATE`. Partial unique indexes provide a database backstop for "one active budget", "one active period" and "one current rollover revision". |
 | D6 | Audit design | Full before/after JSON for every financial record change; changed-field before/after for configuration changes. Audit rows are written in the same transaction as the change and are never updated or deleted. See section 12. |
-| D7 | Migration tooling | Versioned SQL migrations, selected in DB-03. This ticket only defines the model. `database/schema.sql` must stop being the long-term migration mechanism. |
+| D7 | Migration tooling | Versioned SQL migrations, implemented in DB-03 under `database/migrations` with a tracked `schema_migrations` table. `database/schema.sql` is no longer the migration mechanism. |
 | D8 | Wallet integration | Budgeting uses `users` only. It does not duplicate wallets as jars and does not use wallet balances as plan funds. |
 
 ---
@@ -218,7 +218,7 @@ The entity list below is final for this phase. Four supporting entities are adde
 - Check `ends_on >= starts_on`.
 - Check `status IN ('draft', 'active', 'closed')`.
 - Check close amount consistency: either `status = 'closed'` and all close amount fields are present, or all close amount fields are null. (`closed_at` may remain as the last close timestamp after a reopen.)
-- **No overlapping periods:** `EXCLUDE USING gist (budget_id WITH =, daterange(starts_on, ends_on, '[]') WITH &&)` using the `btree_gist` extension. DB-02 implements this as `budget_periods_no_overlap` in `database/schema.postgres.sql`.
+- **No overlapping periods:** `EXCLUDE USING gist (budget_id WITH =, daterange(starts_on, ends_on, '[]') WITH &&)` using the `btree_gist` extension. DB-02 implements this as `budget_periods_no_overlap` in `database/migrations/001_initial_schema.postgres.sql`.
 - Index `(budget_id, starts_on DESC)`, `(user_id, status)`.
 
 **Lifecycle**
@@ -1067,24 +1067,28 @@ DB-02 should implement the model in this order:
 
 Implementation must not add budgeting foreign keys to `wallets` or reuse `ledger_entries` for jars.
 
-### DB-02 implementation notes
+### DB-02 and DB-03 implementation notes
 
-- `database/schema.sql` is the portable baseline applied at startup and by the
-  pg-mem test suite. It contains every approved table, key, `CHECK`, timestamp,
-  and normal index.
-- `database/schema.postgres.sql` adds PostgreSQL-only hardening: the
-  `btree_gist` extension, the `budget_periods_no_overlap` exclusion constraint,
-  and partial unique indexes on composite-FK parent tables.
+- `database/migrations/001_initial_schema.sql` is the portable baseline run by
+  the migration runner and the pg-mem test suite. It contains every approved
+  table, key, `CHECK`, timestamp, and normal index.
+- `database/migrations/001_initial_schema.postgres.sql` adds PostgreSQL-only
+  hardening: the `btree_gist` extension, the `budget_periods_no_overlap`
+  exclusion constraint, and partial unique indexes on composite-FK parent
+  tables.
 - The partial unique indexes for one active budget, one active period, unique
-  jar/category names, and unique income-source names are kept out of
-  `database/schema.sql` because pg-mem corrupts a composite-FK parent row's
-  lookup after an `UPDATE` removes it from a partial index. PostgreSQL enforces
-  them normally.
+  jar/category names, and unique income-source names are kept out of the
+  portable migration because pg-mem corrupts a composite-FK parent row's lookup
+  after an `UPDATE` removes it from a partial index. PostgreSQL enforces them
+  normally.
 - pg-mem does not support `gen_random_uuid()`, `EXCLUDE`, `btree_gist`, regular
   expression checks, or `btrim`/`length`/`trim`. The portable schema therefore
   uses application-generated UUIDs and pg-mem-compatible `CHECK` expressions.
 - The test suite covers the portable constraints. The PostgreSQL-only
-  constraints are applied with `database/schema.postgres.sql` on real databases.
+  constraints are applied by the migration runner on real databases.
+- DB-03 adds `schema_migrations`, checksum verification, advisory locking, and
+  one transaction per migration. Applied migration files are immutable; new
+  changes must use a new numbered file.
 
 ---
 

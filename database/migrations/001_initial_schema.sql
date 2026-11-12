@@ -1,12 +1,12 @@
--- PAYJAR database schema.
+-- Migration 001: initial PAYJAR schema.
 --
--- This file is applied at application startup for the current development
--- workflow and is also loaded by the pg-mem test suite. Keep it compatible
--- with both PostgreSQL and pg-mem.
+-- This migration is immutable once applied. Add new numbered migration files
+-- instead of editing it. It runs on PostgreSQL and pg-mem.
 --
--- PostgreSQL-only hardening that pg-mem cannot parse or handle safely
--- (period overlap exclusion and partial unique indexes on composite-FK
--- parent tables) lives in database/schema.postgres.sql.
+-- PostgreSQL-only hardening that pg-mem cannot parse or handle safely (period
+-- overlap exclusion and partial unique indexes on composite-FK parent tables)
+-- lives in 001_initial_schema.postgres.sql and runs in the same transaction on
+-- PostgreSQL.
 --
 -- Legacy wallet/payment tables are retained unchanged below. Budgeting
 -- records reference users, never wallets.

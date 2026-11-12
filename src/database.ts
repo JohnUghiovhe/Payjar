@@ -1,11 +1,8 @@
-import fs from 'fs/promises';
-import path from 'path';
-
 import { Pool } from 'pg';
 
 import { AppError } from './errors.js';
-
-const resolveSchemaPath = (): string => path.join(process.cwd(), 'database', 'schema.sql');
+import { runMigrations } from './migrations.js';
+import type { MigrationOptions, MigrationResult } from './migrations.js';
 
 export const createDatabasePool = (): Pool => {
   const connectionString = process.env.DATABASE_URL;
@@ -17,8 +14,15 @@ export const createDatabasePool = (): Pool => {
   return new Pool({ connectionString });
 };
 
-export const initializeDatabase = async (pool: Pick<Pool, 'query'>): Promise<void> => {
-  const schemaPath = resolveSchemaPath();
-  const schema = await fs.readFile(schemaPath, 'utf8');
-  await pool.query(schema);
+export const initializeDatabase = async (
+  pool: Pick<Pool, 'connect'>,
+  options: MigrationOptions = {},
+): Promise<MigrationResult> => {
+  const client = await pool.connect();
+
+  try {
+    return await runMigrations(client, options);
+  } finally {
+    client.release();
+  }
 };

@@ -34,44 +34,75 @@ npm run build
 npm start
 ```
 
-The server automatically applies the portable schema definitions from
-`database/schema.sql` at startup.
+The server applies pending migrations from `database/migrations` at startup
+before serving traffic.
 
-## Database schema
+## Database schema and migrations
 
-`database/schema.sql` is the portable baseline. It creates the wallet tables and
-the budgeting tables (`users`, `budgets`, `budget_periods`, `categories`, `jars`,
-`jar_allocations`, `income_sources`, `income_entries`, `expenses`, `commitments`,
+Schema changes live in `database/migrations`. Each migration runs once and is
+recorded in the `schema_migrations` table with its id, SHA-256 checksum, and
+applied timestamp.
+
+Migration files use a zero-padded numeric prefix:
+
+- `NNN_description.sql` — portable SQL that runs on PostgreSQL and pg-mem.
+- `NNN_description.postgres.sql` — optional PostgreSQL-only add-on. The runner
+  applies it after the portable file in the same transaction when PostgreSQL
+  features are enabled.
+
+`001_initial_schema.sql` creates the wallet tables and the budgeting tables
+(`users`, `budgets`, `budget_periods`, `categories`, `jars`, `jar_allocations`,
+`income_sources`, `income_entries`, `expenses`, `commitments`,
 `period_jar_summaries`, `rollover_records`, and `audit_events`).
+`001_initial_schema.postgres.sql` adds the `btree_gist` extension, the
+`budget_periods_no_overlap` exclusion constraint, and the partial unique indexes
+for one active budget per user, one active period per budget, unique budget/jar
+and income-source names, and one jar per category per budget.
 
 Kobo amounts are stored as `BIGINT`. Ownership is enforced with composite foreign
 keys so a period, jar, allocation, expense, summary, or rollover row cannot
 reference another user's or another budget's record. Invalid amounts, statuses,
 dates, and close snapshots are rejected by `CHECK` constraints.
 
-On PostgreSQL, apply the PostgreSQL-only hardening after the baseline:
+### Run migrations
+
+Build the project first, then run the migration command:
 
 ```bash
-psql "$DATABASE_URL" -f database/schema.sql
-psql "$DATABASE_URL" -f database/schema.postgres.sql
+npm run build
+npm run migrate
 ```
 
-`database/schema.postgres.sql` adds the `btree_gist` extension, the
-`budget_periods_no_overlap` exclusion constraint, and the partial unique indexes
-for one active budget per user, one active period per budget, unique budget/jar
-and income-source names, and one jar per category per budget. Startup continues
-to apply only `database/schema.sql`; run the PostgreSQL file whenever the
-baseline is applied to a new database. The `CREATE EXTENSION` statement requires
-a role that can install extensions, or an administrator can install
-`btree_gist` first.
+`npm start` also applies pending migrations during startup. The migration runner
+uses a PostgreSQL advisory lock so concurrent application instances do not apply
+the same migration twice. The `CREATE EXTENSION` statement requires a role that
+can install extensions, or an administrator can install `btree_gist` first.
 
 To create a clean local database from scratch:
 
 ```bash
 createdb payjar
-psql "$DATABASE_URL" -f database/schema.sql
-psql "$DATABASE_URL" -f database/schema.postgres.sql
+npm run migrate
 ```
+
+### Existing databases
+
+The first migration is safe to apply to an existing database: it uses
+`CREATE TABLE IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS`, so existing
+wallet rows are preserved. The first successful run records the baseline in
+`schema_migrations`.
+
+### Failed migrations and immutability
+
+- Each migration runs inside its own transaction. If it fails, it is rolled back,
+  no tracking row is written, and later migrations are not attempted.
+- Earlier successful migrations remain applied. Fix the failing migration and run
+  the command again.
+- Never edit a migration that has already been applied. The runner rejects
+  checksum changes; create a new numbered migration instead.
+- Do not put `BEGIN`, `COMMIT`, or `CREATE INDEX CONCURRENTLY` inside a migration
+  file. The runner manages the transaction.
+- Back up production data before running a migration that changes large tables.
 
 ## Test locally
 
@@ -79,10 +110,10 @@ psql "$DATABASE_URL" -f database/schema.postgres.sql
 npm test
 ```
 
-The Jest suite runs against pg-mem, which loads only `database/schema.sql`.
-pg-mem cannot parse PostgreSQL exclusion constraints and mishandles partial
-unique indexes on composite-FK parent tables after an `UPDATE`, so those
-constraints are covered by `database/schema.postgres.sql` instead.
+The Jest suite runs the portable migrations against pg-mem with PostgreSQL
+features disabled. pg-mem cannot parse exclusion constraints or advisory locks
+and mishandles partial unique indexes on composite-FK parent tables after an
+`UPDATE`, so those constraints are covered by the `.postgres.sql` add-on instead.
 
 ## API endpoints
 
@@ -100,11 +131,12 @@ constraints are covered by `database/schema.postgres.sql` instead.
 
 ## Data model
 
-The SQL schema in `database/schema.sql` includes the legacy wallet module:
-`wallets`, `transactions`, `ledger_entries`, and `idempotency_keys`. Those tables
-are unchanged and remain isolated from budgeting records.
+The initial migration in `database/migrations/001_initial_schema.sql` includes
+the legacy wallet module: `wallets`, `transactions`, `ledger_entries`, and
+`idempotency_keys`. Those tables are unchanged and remain isolated from budgeting
+records.
 
-The budgeting tables listed under **Database schema** model users, budgets,
+The budgeting tables listed under **Database schema and migrations** model users, budgets,
 periods, jars, allocations, income, expenses, commitments, close-time
 summaries, rollovers, and audit history. See
 `docs/DATABASE-DOMAIN-MODEL.md` for the entity relationships and constraints.

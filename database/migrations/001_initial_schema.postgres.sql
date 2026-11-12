@@ -1,9 +1,10 @@
--- PAYJAR PostgreSQL-only schema hardening.
+-- Migration 001 (PostgreSQL-only add-on): schema hardening.
 --
--- Apply this file after database/schema.sql on a real PostgreSQL database.
--- It is intentionally separate because pg-mem (used by the test suite)
--- cannot parse EXCLUDE constraints, install btree_gist, or safely update a
--- composite-FK parent row after it leaves a partial unique index.
+-- The migration runner applies this file after 001_initial_schema.sql inside
+-- the same transaction when PostgreSQL features are enabled. It is intentionally
+-- separate because pg-mem (used by the test suite) cannot parse EXCLUDE
+-- constraints, install btree_gist, or safely update a composite-FK parent row
+-- after it leaves a partial unique index.
 --
 -- Everything here is still part of DB-02. Application-level validation
 -- remains required for clear error messages, but the database is the final

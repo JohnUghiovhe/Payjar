@@ -15,7 +15,7 @@ const createTestDatabase = async () => {
   const pgAdapter = db.adapters.createPg();
   const pool = new pgAdapter.Pool();
 
-  await initializeDatabase(pool);
+  await initializeDatabase(pool, { postgresFeatures: false });
 
   return pool;
 };
