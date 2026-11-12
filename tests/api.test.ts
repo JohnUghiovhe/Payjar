@@ -17,7 +17,7 @@ describe('PayJar API', () => {
     const pgAdapter = db.adapters.createPg();
     const pool = new pgAdapter.Pool();
 
-    await initializeDatabase(pool);
+    await initializeDatabase(pool, { postgresFeatures: false });
 
     const service = new WalletService(pool, 'test_paystack_secret');
     await service.seedSettlementAccount();
