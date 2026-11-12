@@ -574,7 +574,8 @@ The entity list below is final for this phase. Four supporting entities are adde
 - Check `actor_type IN ('user','system')`.
 - Index `(user_id, occurred_at DESC)`, `(entity_type, entity_id, occurred_at DESC)`.
 - No `updated_at`, no `deleted_at`.
-- DB-02 should revoke `UPDATE` and `DELETE` on this table from the application role.
+- DB-07 also installs a PostgreSQL trigger that rejects `UPDATE`, `DELETE`, and
+  `TRUNCATE`; the application repository exposes no audit mutation operations.
 
 **Rules**
 

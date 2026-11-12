@@ -34,18 +34,24 @@ describe('database migrations', () => {
     const pool = createPool();
 
     const firstRun = await initializeDatabase(pool, { postgresFeatures: false });
-    expect(firstRun.applied).toEqual(['001_initial_schema']);
-
+    expect(firstRun.applied).toEqual([
+      '001_initial_schema',
+      '002_audit_event_append_only',
+    ]);
     const secondRun = await initializeDatabase(pool, { postgresFeatures: false });
     expect(secondRun.applied).toEqual([]);
-    expect(secondRun.skipped).toEqual(['001_initial_schema']);
+    expect(secondRun.skipped).toEqual([
+      '001_initial_schema',
+      '002_audit_event_append_only',
+    ]);
 
     const tracking = (await pool.query(
       'SELECT id, checksum FROM schema_migrations ORDER BY id',
     )) as { rows: Array<{ id: string; checksum: string }> };
 
-    expect(tracking.rows).toHaveLength(1);
+    expect(tracking.rows).toHaveLength(2);
     expect(tracking.rows[0]?.id).toBe('001_initial_schema');
+    expect(tracking.rows[1]?.id).toBe('002_audit_event_append_only');
     expect(tracking.rows[0]?.checksum).toMatch(/^[a-f0-9]{64}$/);
 
     await expect(pool.query('SELECT * FROM wallets')).resolves.toBeDefined();

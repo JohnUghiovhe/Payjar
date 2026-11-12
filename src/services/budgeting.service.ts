@@ -84,6 +84,7 @@ export interface CreateBudgetPeriodCommand {
 export interface CreateBudgetCommand {
   userId: string;
   idempotencyKey: string;
+  requestId?: string | null;
   name: string;
   periodType: BudgetPeriodType;
   timezone: string;
@@ -95,6 +96,7 @@ export interface UpdateBudgetCommand {
   userId: string;
   budgetId: string;
   expectedVersion: number;
+  requestId?: string | null;
   name?: string;
   periodType?: BudgetPeriodType;
   timezone?: string;
@@ -158,12 +160,15 @@ export interface SaveJarAllocationsCommand {
   userId: string;
   budgetId: string;
   periodId: string;
+  requestId?: string | null;
   allocations: readonly JarAllocationCommand[];
 }
 
 export interface RecordIncomeCommand {
   userId: string;
   idempotencyKey: string;
+  requestId?: string | null;
+  reason?: string | null;
   periodId: string;
   incomeSourceId?: string | null;
   amountKobo: Kobo;
@@ -176,6 +181,8 @@ export interface RecordIncomeCommand {
 export interface RecordExpenseCommand {
   userId: string;
   idempotencyKey: string;
+  requestId?: string | null;
+  reason?: string | null;
   periodId: string;
   categoryId: string;
   jarId?: string | null;
@@ -241,10 +248,18 @@ const canonicalize = (value: unknown): unknown => {
   return value;
 };
 
-const hashRequest = (value: unknown): string =>
-  createHash('sha256')
-    .update(JSON.stringify(canonicalize(value)))
+const hashRequest = (value: unknown): string => {
+  const payload =
+    value !== null && typeof value === 'object' && !Array.isArray(value)
+      ? Object.fromEntries(
+          Object.entries(value).filter(([key]) => key !== 'requestId'),
+        )
+      : value;
+
+  return createHash('sha256')
+    .update(JSON.stringify(canonicalize(payload)))
     .digest('hex');
+};
 
 const requireStoredResponse = <Result>(
   response: unknown,
@@ -530,9 +545,19 @@ export class BudgetingService {
           timezone: command.timezone,
           currency: command.currency,
         });
+        await recordAuditEvent(client, {
+          userId: command.userId,
+          actorType: 'user',
+          actorId: command.userId,
+          entityType: 'budget',
+          entityId: budget.id,
+          action: 'budget.created',
+          afterState: auditValue(budget),
+          requestId: command.requestId,
+        });
 
         if (command.initialPeriod) {
-          await createBudgetPeriodRecord(client, {
+          const period = await createBudgetPeriodRecord(client, {
             budgetId: budget.id,
             userId: command.userId,
             sequence: 1,
@@ -544,6 +569,16 @@ export class BudgetingService {
             status: 'active',
             openingUnallocatedKobo:
               command.initialPeriod.openingUnallocatedKobo ?? 0n,
+          });
+          await recordAuditEvent(client, {
+            userId: command.userId,
+            actorType: 'user',
+            actorId: command.userId,
+            entityType: 'budget_period',
+            entityId: period.id,
+            action: 'budget_period.created',
+            afterState: auditValue(period),
+            requestId: command.requestId,
           });
         }
 
@@ -573,6 +608,14 @@ export class BudgetingService {
     requireNonEmpty(command.budgetId, 'budgetId');
     requireExpectedVersion(command.expectedVersion);
     if (command.timezone !== undefined) requireValidTimeZone(command.timezone);
+    if (
+      command.name === undefined &&
+      command.periodType === undefined &&
+      command.timezone === undefined &&
+      command.status === undefined
+    ) {
+      throw new AppError(400, 'At least one budget field must be provided.');
+    }
 
     try {
       return await withTransaction(this.pool, 'updateBudget', async client => {
@@ -597,6 +640,39 @@ export class BudgetingService {
             'Budget was modified by another request. Reload and try again.',
           );
         }
+
+        const beforeState: Record<string, unknown> = {};
+        const afterState: Record<string, unknown> = {};
+        if (command.name !== undefined) {
+          beforeState.name = existing.name;
+          afterState.name = updated.name;
+        }
+        if (command.periodType !== undefined) {
+          beforeState.periodType = existing.periodType;
+          afterState.periodType = updated.periodType;
+        }
+        if (command.timezone !== undefined) {
+          beforeState.timezone = existing.timezone;
+          afterState.timezone = updated.timezone;
+        }
+        if (command.status !== undefined) {
+          beforeState.status = existing.status;
+          afterState.status = updated.status;
+        }
+        await recordAuditEvent(client, {
+          userId: command.userId,
+          actorType: 'user',
+          actorId: command.userId,
+          entityType: 'budget',
+          entityId: updated.id,
+          action:
+            existing.status !== 'archived' && updated.status === 'archived'
+              ? 'budget.archived'
+              : 'budget.updated',
+          beforeState: auditValue(beforeState),
+          afterState: auditValue(afterState),
+          requestId: command.requestId,
+        });
 
         return updated;
       });
@@ -813,6 +889,18 @@ export class BudgetingService {
           status: 'draft',
           openingUnallocatedKobo: nextOpeningUnallocatedKobo,
         }));
+      if (!nextExisting) {
+        await recordAuditEvent(client, {
+          userId: command.userId,
+          actorType: 'user',
+          actorId: command.actorId,
+          entityType: 'budget_period',
+          entityId: nextPeriod.id,
+          action: 'budget_period.created',
+          afterState: auditValue(nextPeriod),
+          requestId: command.requestId,
+        });
+      }
       if (nextExisting) {
         const updatedNextPeriod = await updateDraftBudgetPeriodOpening(client, {
           periodId: nextExisting.id,
@@ -969,7 +1057,30 @@ export class BudgetingService {
         }),
         requestId: command.requestId,
       });
+      for (const previous of supersededRollovers) {
+        const key = `${previous.scope}:${previous.jarId ?? ''}`;
+        const replacement = rolloverByScopeAndJar.get(key);
+        if (replacement) {
+          await recordAuditEvent(client, {
+            userId: command.userId,
+            actorType: 'user',
+            actorId: command.actorId,
+            entityType: 'rollover_record',
+            entityId: previous.id,
+            action: 'rollover.superseded',
+            beforeState: auditValue(previous),
+            afterState: auditValue(replacement),
+            requestId: command.requestId,
+          });
+        }
+      }
       for (const rollover of rollovers) {
+        const previous = priorRollovers.find(
+          item =>
+            item.scope === rollover.scope &&
+            item.jarId === rollover.jarId &&
+            item.supersededAt === null,
+        );
         await recordAuditEvent(client, {
           userId: command.userId,
           actorType: 'user',
@@ -977,6 +1088,7 @@ export class BudgetingService {
           entityType: 'rollover_record',
           entityId: rollover.id,
           action: 'rollover.applied',
+          beforeState: auditValue(previous ?? null),
           afterState: auditValue(rollover),
           requestId: command.requestId,
         });
@@ -1481,18 +1593,17 @@ export class BudgetingService {
             note: allocation.note ?? null,
           });
           saved.push(savedAllocation);
-          if (period.reopenCount > 0) {
-            await recordAuditEvent(client, {
-              userId: command.userId,
-              actorType: 'user',
-              actorId: command.userId,
-              entityType: 'jar_allocation',
-              entityId: savedAllocation.id,
-              action: current ? 'jar_allocation.updated' : 'jar_allocation.created',
-              beforeState: auditValue(current),
-              afterState: auditValue(savedAllocation),
-            });
-          }
+          await recordAuditEvent(client, {
+            userId: command.userId,
+            actorType: 'user',
+            actorId: command.userId,
+            entityType: 'jar_allocation',
+            entityId: savedAllocation.id,
+            action: current ? 'jar_allocation.updated' : 'jar_allocation.created',
+            beforeState: auditValue(current),
+            afterState: auditValue(savedAllocation),
+            requestId: command.requestId,
+          });
         }
 
         return { allocations: saved, funding };
@@ -1506,6 +1617,9 @@ export class BudgetingService {
     requireNonEmpty(command.periodId, 'periodId');
     requirePositiveKobo(command.amountKobo, 'amountKobo');
     requireOptionalTimestamp(command.receivedAt, 'receivedAt');
+    if (command.status === 'cancelled') {
+      requireNonEmpty(command.reason, 'reason');
+    }
 
     if (command.status === 'received' && !command.receivedAt) {
       throw new AppError(
@@ -1578,17 +1692,19 @@ export class BudgetingService {
         note: command.note ?? null,
       });
 
-      if (period.reopenCount > 0) {
-        await recordAuditEvent(client, {
-          userId: command.userId,
-          actorType: 'user',
-          actorId: command.userId,
-          entityType: 'income_entry',
-          entityId: entry.id,
-          action: 'income_entry.recorded',
-          afterState: auditValue(entry),
-        });
-      }
+      await recordAuditEvent(client, {
+        userId: command.userId,
+        actorType: 'user',
+        actorId: command.userId,
+        entityType: 'income_entry',
+        entityId: entry.id,
+        action: entry.status === 'cancelled'
+          ? 'income_entry.cancelled'
+          : 'income_entry.recorded',
+        afterState: auditValue(entry),
+        reason: command.reason,
+        requestId: command.requestId,
+      });
 
       await completeIdempotencyKey(client, {
         scope,
@@ -1616,6 +1732,9 @@ export class BudgetingService {
 
     if (entryType === 'refund' && !command.adjustsExpenseId) {
       throw new AppError(400, 'A refund must reference the original expense.');
+    }
+    if (entryType === 'refund') {
+      requireNonEmpty(command.reason, 'reason');
     }
 
     if (entryType === 'expense' && command.adjustsExpenseId) {
@@ -1710,17 +1829,19 @@ export class BudgetingService {
         source: command.source ?? 'manual',
       });
 
-      if (period.reopenCount > 0) {
-        await recordAuditEvent(client, {
-          userId: command.userId,
-          actorType: 'user',
-          actorId: command.userId,
-          entityType: 'expense',
-          entityId: expense.id,
-          action: 'expense.recorded',
-          afterState: auditValue(expense),
-        });
-      }
+      await recordAuditEvent(client, {
+        userId: command.userId,
+        actorType: 'user',
+        actorId: command.userId,
+        entityType: 'expense',
+        entityId: expense.id,
+        action: expense.entryType === 'refund'
+          ? 'expense.refunded'
+          : 'expense.recorded',
+        afterState: auditValue(expense),
+        reason: command.reason,
+        requestId: command.requestId,
+      });
 
       await completeIdempotencyKey(client, {
         scope,
