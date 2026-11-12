@@ -104,6 +104,19 @@ wallet rows are preserved. The first successful run records the baseline in
   file. The runner manages the transaction.
 - Back up production data before running a migration that changes large tables.
 
+## Budgeting repositories
+
+Budgeting data access lives in `src/repositories/budgeting`. Repositories own all
+SQL, use parameterised queries, and accept either a `Pool` or a `PoolClient` so
+later persistence services can group writes in a transaction. They return
+camelCase models with kobo amounts as `bigint`; they do not contain budgeting
+calculations or period rules.
+
+Repository modules are split by entity: users, budgets, periods, categories,
+jars, allocations, income, expenses, commitments, summaries, rollovers, and
+audit history. Query failures raise `RepositoryError`; missing required records
+raise the existing `AppError` with status 404.
+
 ## Test locally
 
 ```bash
