@@ -12,3 +12,4 @@ export * from './commitment.repository.js';
 export * from './summary.repository.js';
 export * from './rollover.repository.js';
 export * from './audit.repository.js';
+export * from './idempotency.repository.js';

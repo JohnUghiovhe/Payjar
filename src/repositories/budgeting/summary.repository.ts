@@ -1,3 +1,4 @@
+import type { Kobo } from '../../budgeting/money.js';
 import {
   runQuery,
   toInteger,
@@ -83,4 +84,51 @@ export const getCurrentPeriodJarSummary = async (
   );
 
   return rows[0] ? mapPeriodJarSummary(rows[0]) : null;
+};
+
+type JarCarryForwardRow = {
+  jar_id: string;
+  carried_forward_kobo: bigint | number | string;
+};
+
+export interface JarCarryForward {
+  jarId: string;
+  carriedForwardKobo: Kobo;
+}
+
+/**
+ * Returns the most recent non-superseded carry-forward for each jar from
+ * periods before the supplied sequence. This is the opening balance for the
+ * current period.
+ */
+export const listJarCarryForwards = async (
+  db: Queryable,
+  budgetId: string,
+  beforeSequence: number,
+): Promise<JarCarryForward[]> => {
+  const rows = await runQuery<JarCarryForwardRow>(
+    db,
+    'listJarCarryForwards',
+    `SELECT pjs.jar_id, pjs.carried_forward_kobo
+     FROM period_jar_summaries pjs
+     JOIN budget_periods bp ON bp.id = pjs.period_id
+     WHERE pjs.budget_id = $1
+       AND pjs.superseded_at IS NULL
+       AND bp.sequence < $2
+     ORDER BY bp.sequence DESC`,
+    [budgetId, beforeSequence],
+  );
+
+  const latestByJar = new Map<string, Kobo>();
+
+  for (const row of rows) {
+    if (!latestByJar.has(row.jar_id)) {
+      latestByJar.set(row.jar_id, toKobo(row.carried_forward_kobo));
+    }
+  }
+
+  return [...latestByJar.entries()].map(([jarId, carriedForwardKobo]) => ({
+    jarId,
+    carriedForwardKobo,
+  }));
 };

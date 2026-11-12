@@ -77,6 +77,68 @@ export const getBudget = async (
   return mapBudget(requireRow(rows, 'Budget'));
 };
 
+/**
+ * Locks the budget row for the remainder of the transaction. Use this before
+ * checking invariants or updating mutable budget state.
+ */
+export const getBudgetForUpdate = async (
+  db: Queryable,
+  budgetId: string,
+): Promise<Budget | null> => {
+  const rows = await runQuery<BudgetRow>(
+    db,
+    'getBudgetForUpdate',
+    `SELECT * FROM budgets
+     WHERE id = $1 AND deleted_at IS NULL
+     FOR UPDATE`,
+    [budgetId],
+  );
+
+  return rows[0] ? mapBudget(rows[0]) : null;
+};
+
+export interface UpdateBudgetRecord {
+  budgetId: string;
+  expectedVersion: number;
+  name?: string;
+  periodType?: Budget['periodType'];
+  timezone?: string;
+  status?: Budget['status'];
+}
+
+/**
+ * Optimistically updates a budget. Returns null when the version no longer
+ * matches, so the service can report a conflict instead of overwriting.
+ */
+export const updateBudget = async (
+  db: Queryable,
+  input: UpdateBudgetRecord,
+): Promise<Budget | null> => {
+  const rows = await runQuery<BudgetRow>(
+    db,
+    'updateBudget',
+    `UPDATE budgets
+     SET name = COALESCE($2, name),
+         period_type = COALESCE($3, period_type),
+         timezone = COALESCE($4, timezone),
+         status = COALESCE($5, status),
+         version = version + 1,
+         updated_at = now()
+     WHERE id = $1 AND version = $6 AND deleted_at IS NULL
+     RETURNING *`,
+    [
+      input.budgetId,
+      input.name ?? null,
+      input.periodType ?? null,
+      input.timezone ?? null,
+      input.status ?? null,
+      input.expectedVersion,
+    ],
+  );
+
+  return rows[0] ? mapBudget(rows[0]) : null;
+};
+
 export const getUserActiveBudget = async (
   db: Queryable,
   userId: string,

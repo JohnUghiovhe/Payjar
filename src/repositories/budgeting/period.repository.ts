@@ -114,6 +114,24 @@ export const getBudgetPeriod = async (
   return mapBudgetPeriod(requireRow(rows, 'Budget period'));
 };
 
+/**
+ * Locks the period row for the remainder of the transaction. Use this before
+ * allocation changes or any operation that must not interleave with closing.
+ */
+export const getBudgetPeriodForUpdate = async (
+  db: Queryable,
+  periodId: string,
+): Promise<BudgetPeriod | null> => {
+  const rows = await runQuery<BudgetPeriodRow>(
+    db,
+    'getBudgetPeriodForUpdate',
+    'SELECT * FROM budget_periods WHERE id = $1 FOR UPDATE',
+    [periodId],
+  );
+
+  return rows[0] ? mapBudgetPeriod(rows[0]) : null;
+};
+
 export const getActiveBudgetPeriod = async (
   db: Queryable,
   budgetId: string,

@@ -108,14 +108,21 @@ wallet rows are preserved. The first successful run records the baseline in
 
 Budgeting data access lives in `src/repositories/budgeting`. Repositories own all
 SQL, use parameterised queries, and accept either a `Pool` or a `PoolClient` so
-later persistence services can group writes in a transaction. They return
+services can group writes in a transaction. They return
 camelCase models with kobo amounts as `bigint`; they do not contain budgeting
 calculations or period rules.
 
 Repository modules are split by entity: users, budgets, periods, categories,
 jars, allocations, income, expenses, commitments, summaries, rollovers, and
-audit history. Query failures raise `RepositoryError`; missing required records
-raise the existing `AppError` with status 404.
+audit history, plus idempotency records. Query failures raise `RepositoryError`;
+missing required records raise the existing `AppError` with status 404.
+
+`src/services/budgeting.service.ts` coordinates budget persistence and the pure
+calculation functions. Multi-record writes run in transactions; budget, income,
+and expense creates use user-scoped idempotency keys, and budget/allocation
+updates require expected versions to reject stale writes. Income, expenses, and
+allocations cannot be changed in closed periods, and archived budgets reject
+financial writes.
 
 ## Test locally
 

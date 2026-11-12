@@ -92,14 +92,15 @@ export const getJar = async (
 export const listJars = async (
   db: Queryable,
   budgetId: string,
+  options: { includeDeleted?: boolean } = {},
 ): Promise<Jar[]> => {
   const rows = await runQuery<JarRow>(
     db,
     'listJars',
     `SELECT * FROM jars
-     WHERE budget_id = $1 AND deleted_at IS NULL
+     WHERE budget_id = $1 AND ($2::boolean OR deleted_at IS NULL)
      ORDER BY sort_order ASC, created_at ASC`,
-    [budgetId],
+    [budgetId, options.includeDeleted ?? false],
   );
 
   return rows.map(mapJar);
