@@ -218,7 +218,7 @@ The entity list below is final for this phase. Four supporting entities are adde
 - Check `ends_on >= starts_on`.
 - Check `status IN ('draft', 'active', 'closed')`.
 - Check close amount consistency: either `status = 'closed'` and all close amount fields are present, or all close amount fields are null. (`closed_at` may remain as the last close timestamp after a reopen.)
-- **No overlapping periods:** `EXCLUDE USING gist (budget_id WITH =, daterange(starts_on, ends_on, '[]') WITH &&)` using the `btree_gist` extension. This is the target DB-02 constraint.
+- **No overlapping periods:** `EXCLUDE USING gist (budget_id WITH =, daterange(starts_on, ends_on, '[]') WITH &&)` using the `btree_gist` extension. DB-02 implements this as `budget_periods_no_overlap` in `database/schema.postgres.sql`.
 - Index `(budget_id, starts_on DESC)`, `(user_id, status)`.
 
 **Lifecycle**
@@ -1066,6 +1066,25 @@ DB-02 should implement the model in this order:
 12. Document the clean-database setup process.
 
 Implementation must not add budgeting foreign keys to `wallets` or reuse `ledger_entries` for jars.
+
+### DB-02 implementation notes
+
+- `database/schema.sql` is the portable baseline applied at startup and by the
+  pg-mem test suite. It contains every approved table, key, `CHECK`, timestamp,
+  and normal index.
+- `database/schema.postgres.sql` adds PostgreSQL-only hardening: the
+  `btree_gist` extension, the `budget_periods_no_overlap` exclusion constraint,
+  and partial unique indexes on composite-FK parent tables.
+- The partial unique indexes for one active budget, one active period, unique
+  jar/category names, and unique income-source names are kept out of
+  `database/schema.sql` because pg-mem corrupts a composite-FK parent row's
+  lookup after an `UPDATE` removes it from a partial index. PostgreSQL enforces
+  them normally.
+- pg-mem does not support `gen_random_uuid()`, `EXCLUDE`, `btree_gist`, regular
+  expression checks, or `btrim`/`length`/`trim`. The portable schema therefore
+  uses application-generated UUIDs and pg-mem-compatible `CHECK` expressions.
+- The test suite covers the portable constraints. The PostgreSQL-only
+  constraints are applied with `database/schema.postgres.sql` on real databases.
 
 ---
 
